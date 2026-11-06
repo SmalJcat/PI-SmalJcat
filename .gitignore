@@ -1,0 +1,35 @@
+# Dependencies and generated output
+**/node_modules/
+**/dist/
+**/release/
+**/artifacts/
+**/target/
+**/src-tauri/gen/
+**/.cargo/config.toml
+*.log
+*.tmp
+*.exe
+*.dll
+*.zip
+*.lnk
+
+# Local credentials, agent state, and conversations
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+**/.pi/
+**/.codex/
+**/sessions/
+*.jsonl
+auth.json
+preferences.json
+recovery.json
+
+# Editor and OS state
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

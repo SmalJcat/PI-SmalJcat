@@ -1,0 +1,10 @@
+pub mod agents;
+pub mod context;
+pub mod core;
+#[cfg(feature = "desktop")]
+pub mod desktop;
+pub mod mcp;
+pub mod review;
+pub mod rpc;
+pub mod session_guard;
+pub mod workspace;
