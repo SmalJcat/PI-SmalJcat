@@ -35,7 +35,15 @@ jobs:
           rustup show active-toolchain
       - run: npm ci
       - run: npm run build
-      - run: npm test
+      - name: Run JavaScript tests
+        run: |
+          npm test 2>&1 | Tee-Object -FilePath js-tests.log
+          $result = $LASTEXITCODE
+          if ($result -ne 0) {
+            $details = (Get-Content -Raw js-tests.log) -replace '%', '%25' -replace "`r", '%0D' -replace "`n", '%0A'
+            Write-Output "::error title=JavaScript test failure::$details"
+          }
+          exit $result
       - run: npm run test:rust
       - name: Check Rust formatting
         run: node scripts/native.mjs cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
