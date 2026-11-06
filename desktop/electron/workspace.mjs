@@ -108,9 +108,10 @@ export async function previewFile(cwd, relative) {
 }
 export async function gitChanges(cwd) {
   try {
+    cwd = await realpath(cwd);
     const { stdout } = await exec('git', ['-c', 'core.quotepath=false', 'status', '--porcelain=v1', '-z', '--untracked-files=all', '--', '.'], { cwd, windowsHide: true, maxBuffer: 4 * 1024 * 1024, timeout: 15000 });
     const { stdout: branch } = await exec('git', ['branch', '--show-current'], { cwd, windowsHide: true, timeout: 15000 });
-    const root = (await exec('git', ['rev-parse', '--show-toplevel'], { cwd, windowsHide: true, timeout: 15000 })).stdout.trim();
+    const root = await realpath((await exec('git', ['rev-parse', '--show-toplevel'], { cwd, windowsHide: true, timeout: 15000 })).stdout.trim());
     const records = stdout.split('\0');
     const files = [];
     for (let i = 0; i < records.length; i++) {

@@ -124,6 +124,11 @@ test('Git preview includes staged and unstaged changes without executing textcon
   const nested = await gitChanges(path.join(dir, 'sub'));
   assert.deepEqual(nested.files.map(file => file.path), ['child.txt']);
   assert.equal((await gitDiff(path.join(dir, 'sub'), 'child.txt')).content, 'child');
+  const aliasRoot = await temporary(t), alias = path.join(aliasRoot, 'repo-link');
+  await symlink(dir, alias, process.platform === 'win32' ? 'junction' : 'dir');
+  const aliased = await gitChanges(alias);
+  assert.equal(aliased.available, true);
+  assert.deepEqual(aliased.files.map(file => file.path).sort(), ['file.txt', 'sub/child.txt'.split('/').join(path.sep), '新文件.txt'].sort());
 });
 
 test('RPC correlates out-of-order responses, rejects failures, times out and shuts down its child', async t => {
