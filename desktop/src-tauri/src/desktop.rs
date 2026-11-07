@@ -252,7 +252,15 @@ async fn dispatch(
     }
 }
 
+fn startup_trace(stage: &str) {
+    #[cfg(feature = "test-fixture")]
+    eprintln!("[tauri-startup] {stage}");
+    #[cfg(not(feature = "test-fixture"))]
+    let _ = stage;
+}
+
 pub fn run() {
+    startup_trace("enter run");
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(window) = app.get_webview_window("main") {
@@ -264,10 +272,13 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
+            startup_trace("setup entered");
             let data_dir = std::env::var_os("PI_DESKTOP_USER_DATA")
                 .map(PathBuf::from)
                 .unwrap_or(app.path().app_data_dir()?);
+            startup_trace("creating core");
             let core = Core::new(&data_dir)?;
+            startup_trace("core ready");
             app.manage(DesktopState {
                 core,
                 close_prompt: AtomicBool::new(false),
@@ -290,16 +301,22 @@ pub fn run() {
                                 && url.port() == Some(5178))
                     })
                     .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny);
+            // Elevated WebView2 hosts ignore WEBVIEW2_* environment overrides.
+            // Use the API only in the explicitly enabled test-fixture build.
             #[cfg(feature = "test-fixture")]
-            let builder = if std::env::var("PI_DESKTOP_DEBUG_PORT").as_deref() == Ok("9224") {
-                builder.additional_browser_args(
-                    "--remote-debugging-port=9224 --remote-debugging-address=127.0.0.1",
-                )
+            let builder = if let Some(args) = crate::test_support::browser_arguments(
+                std::env::var("PI_DESKTOP_DEBUG_PORT").ok().as_deref(),
+            )? {
+                startup_trace(&format!("WebView2 API arguments: {args}"));
+                builder.additional_browser_args(&args)
             } else {
                 builder
             };
+            startup_trace("building WebView2 window");
             let window = builder.build()?;
+            startup_trace("WebView2 window built");
             window.set_focus()?;
+            startup_trace("window focused");
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![pi_subscribe, pi_command])

@@ -60,3 +60,13 @@ CI 的 Linux / Windows 两个 job 使用同一脚本，成功或失败均保留�
 原生 UI 验收在普通环境最多等待 CDP 30 秒，在设置了 `CI` 的环境最多等待 120 秒；单次握手最多 5 秒，并受剩余总预算限制。初次启动和崩溃恢复使用同样的重试逻辑，进程退出或启动错误会提前失败，不会把超时当作通过。
 
 `tauri-ui-result.json` 的 `startup` 包含各次启动的端点、调试参数、尝试次数、耗时、首个及最后一个连接错误、进程状态与有限长度的标准输出/错误；成功连接还记录 WebView2 版本。等待期间约每 10 秒打印一次连接错误，CI 将其保存在 `webview2.log`。这能区分端口未监听、握手超时和原生进程提前退出；若仍失败，应据此继续定位，而不是仅延长等待或跳过 UI 验收。
+
+### 提升权限的 Windows runner
+
+2026-11-07 的 CI run `42326325085` 使用 `windows-2025-vs2026`，进程存活但 120 秒内 CDP 始终拒绝连接。这个证据只能证明端口未监听，不能证明没有图形会话或 WebView2 崩溃。
+
+Microsoft [安全文档](https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/security#for-an-elevated-host-app-use-appropriate-override-flags) 说明：提升权限的宿主会忽略 `WEBVIEW2_*` 环境变量和 HKCU 覆盖，但接受 API 配置。此前脚本仅传 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`，同时删除了应用的端口配置，这会使提升权限环境中的 CDP 无法开启。
+
+测试脚本现在将同一个随机端口通过 `PI_DESKTOP_DEBUG_PORT` 传入；只有 `test-fixture` 构建解析端口并调用 Tauri 的 `additional_browser_args` API。只接受 1–65535 的数字，固定绑定回环地址，不允许额外参数注入。生产构建不包含此路径。保留环境参数供已有非提升权限的非 fixture 验收使用，不写注册表、不关闭沙箱、不降级运行时，也不跳过 UI 检查。
+
+CI 的 `webview2-environment.json` 记录镜像、会话编号、UserInteractive、提升权限状态及已注册运行时版本。fixture 原生输出标记 run/setup/core/window 阶段，用于区分应用初始化阻塞和 CDP 参数问题。若仍失败，先核对这些证据；非交互会话是独立可能性，不能仅凭 ECONNREFUSED 就认定。此修复仍必须由新的 Windows CI 实跑确认。

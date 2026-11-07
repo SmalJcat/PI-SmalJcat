@@ -34,7 +34,9 @@ if (!real) {
 }
 const debug = await debugEndpoint();
 const env = { ...process.env, PI_DESKTOP_USER_DATA: path.join(temp,'profile'), PI_DESKTOP_WORKSPACE: work, WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: debug.args };
-delete env.PI_DESKTOP_DEBUG_PORT;
+// The fixture build passes this validated port through the WebView2 API,
+// which works even when elevated hosts ignore WEBVIEW2_* overrides.
+env.PI_DESKTOP_DEBUG_PORT = String(debug.port);
 if (!real) { env.PI_DESKTOP_TEST = '1'; env.PI_CODING_AGENT_DIR = path.join(temp, 'agent'); } else { delete env.PI_DESKTOP_TEST; }
 delete env.ELECTRON_RUN_AS_NODE;
 // WebView2 enables CDP only for this verification process, using a free port.

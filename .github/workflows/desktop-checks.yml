@@ -59,6 +59,32 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           rustup show active-toolchain
       - run: npm ci
+      - name: Record Windows WebView2 environment
+        run: |
+          $directory = 'artifacts/verification/windows'
+          New-Item -ItemType Directory -Force $directory | Out-Null
+          $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+          $principal = [Security.Principal.WindowsPrincipal]::new($identity)
+          $runtimeKeys = @(
+            'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}',
+            'HKLM:\SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}',
+            'HKCU:\SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+          )
+          $runtimes = @($runtimeKeys | ForEach-Object {
+            $value = Get-ItemProperty -LiteralPath $_ -ErrorAction SilentlyContinue
+            if ($value.pv) { @{ registryPath = $_; version = $value.pv } }
+          })
+          $report = @{
+            imageOS = $env:ImageOS; imageVersion = $env:ImageVersion
+            osVersion = [Environment]::OSVersion.VersionString
+            sessionId = (Get-Process -Id $PID).SessionId
+            userInteractive = [Environment]::UserInteractive
+            elevated = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+            webview2Runtimes = $runtimes
+          }
+          $json = $report | ConvertTo-Json -Depth 5
+          $json | Set-Content -Encoding utf8 "$directory/webview2-environment.json"
+          Write-Output $json
       - run: npm run check:windows
       - uses: actions/upload-artifact@v7
         if: always()

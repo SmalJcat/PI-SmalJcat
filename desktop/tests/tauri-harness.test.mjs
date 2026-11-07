@@ -101,3 +101,11 @@ for (const ci of [true, false]) {
     }
   });
 }
+
+test('debug endpoint exposes the same dynamic port used by the native API', async () => {
+  const { debugEndpoint } = await import('./tauri-harness.mjs');
+  const endpoint = await debugEndpoint();
+  assert.ok(Number.isInteger(endpoint.port) && endpoint.port > 0 && endpoint.port <= 65535);
+  assert.equal(endpoint.url, `http://127.0.0.1:${endpoint.port}`);
+  assert.equal(endpoint.args, `--remote-debugging-port=${endpoint.port} --remote-debugging-address=127.0.0.1`);
+});

@@ -10,6 +10,7 @@ export async function debugEndpoint() {
   const { port } = server.address();
   await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
   return {
+    port,
     url: `http://127.0.0.1:${port}`,
     args: `--remote-debugging-port=${port} --remote-debugging-address=127.0.0.1`,
   };
