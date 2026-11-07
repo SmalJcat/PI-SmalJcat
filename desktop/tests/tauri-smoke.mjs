@@ -11,7 +11,7 @@ import os from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { debugEndpoint, waitForProcessExit } from './tauri-harness.mjs';
+import { debugEndpoint, waitForProcessExit, waitForCdp } from './tauri-harness.mjs';
 const root = path.resolve(import.meta.dirname, '..');
 const { version } = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
 const release = process.argv.includes('--release');
@@ -40,25 +40,37 @@ delete env.ELECTRON_RUN_AS_NODE;
 // WebView2 enables CDP only for this verification process, using a free port.
 const executable = path.join(root, release ? 'release/tauri/Pi Desktop.exe' : 'src-tauri/target/debug/pi-desktop.exe');
 const executableSha256 = createHash('sha256').update(await readFile(executable)).digest('hex');
-let child = spawn(executable, [], { cwd: root, env, windowsHide: false, stdio: ['ignore','pipe','pipe'] });
-let stderr = '', browser, page;
-child.stderr.on('data', bytes => { stderr = (stderr + bytes.toString()).slice(-10000); });
-child.stdout.on('data', () => {});
+let stderr = '', stdout = '', spawnError, browser, page;
+const startup = [];
+function launch() {
+  stderr = ''; stdout = ''; spawnError = undefined;
+  const process = spawn(executable, [], { cwd: root, env, windowsHide: false, stdio: ['ignore', 'pipe', 'pipe'] });
+  process.on('error', error => { spawnError = error.stack || String(error); });
+  process.stderr.on('data', bytes => { stderr = (stderr + bytes.toString()).slice(-10000); });
+  process.stdout.on('data', bytes => { stdout = (stdout + bytes.toString()).slice(-10000); });
+  return process;
+}
+let child = launch();
+async function connectWebView(phase) {
+  const diagnostics = { phase, executable, executableSha256, browserArguments: debug.args };
+  startup.push(diagnostics);
+  browser = await waitForCdp({
+    connect: (url, options) => chromium.connectOverCDP(url, options), url: debug.url, diagnostics,
+    processState: () => ({ pid: child.pid, exitCode: child.exitCode, signalCode: child.signalCode, spawnError, stdout, stderr }),
+  });
+  diagnostics.browserVersion = browser.version();
+  const context = browser.contexts()[0];
+  assert.ok(context, 'WebView2 CDP connected without a browser context');
+  page = context.pages()[0] || await context.waitForEvent('page', { timeout: 45000 });
+  page.on('pageerror', error => errors.push(error.message));
+}
 const errors = [], checks = [];
 let details = {};
 async function waitForSnapshot(predicate){const end=Date.now()+10000;while(Date.now()<end){const value=await page.evaluate(()=>window.pi.snapshot());if(predicate(value))return value;await delay(100);}throw new Error('Snapshot condition timed out');}
 async function waitForValue(read, predicate, timeout = 25000) { const deadline=Date.now()+timeout; let last; while(Date.now()<deadline){last=await read(); if(predicate(last))return last; await delay(100);} throw new Error(`UI state timed out: ${JSON.stringify(last).slice(0,2000)}`); }
 const waitForTasks = predicate => waitForValue(() => page.evaluate(() => window.pi.agentTasks()), predicate);
 try {
-  const deadline = Date.now() + 30000;
-  while (Date.now() < deadline) {
-    if (child.exitCode !== null) throw new Error(`Tauri exited: ${child.exitCode}\n${stderr}`);
-    try { browser = await chromium.connectOverCDP(debug.url, { timeout: 1000 }); break; } catch { await delay(250); }
-  }
-  assert.ok(browser, `WebView2 CDP unavailable\n${stderr}`);
-  const context = browser.contexts()[0];
-  page = context.pages()[0] || await context.waitForEvent('page');
-  page.on('pageerror', error => errors.push(error.message));
+  await connectWebView('initial');
   await page.locator('.connection-pill.ready').waitFor({ timeout: 45000 });
   const info = await page.evaluate(async () => ({ bootstrap: await window.pi.bootstrap(), diagnostics: await window.pi.diagnostics(), snapshot: await window.pi.snapshot() }));
   assert.equal(info.bootstrap.runtime, 'tauri'); assert.equal(info.bootstrap.version, version);
@@ -304,12 +316,9 @@ try {
     const crashExit = once(child, 'exit');
     const killer = spawn('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true }); await once(killer, 'exit'); await crashExit;
     await Promise.all([beforeCrash.pid, ...(beforeCrash.agentPids || [])].map(pid => waitForProcessExit(pid)));
-    await browser.close().catch(() => {}); browser = null; page = null; stderr = '';
-    child = spawn(executable, [], { cwd: root, env, windowsHide: false, stdio: ['ignore', 'pipe', 'pipe'] });
-    child.stderr.on('data', bytes => { stderr = (stderr + bytes.toString()).slice(-10000); }); child.stdout.on('data', () => {});
-    const restartDeadline = Date.now() + 30000;
-    while (Date.now() < restartDeadline) { try { browser = await chromium.connectOverCDP(debug.url, { timeout: 1000 }); break; } catch { await delay(200); } }
-    assert.ok(browser, 'WebView2 did not restart'); page = browser.contexts()[0].pages()[0]; page.on('pageerror', error => errors.push(error.message));
+    await browser.close().catch(() => {}); browser = null; page = null;
+    child = launch();
+    await connectWebView('restart');
     await page.locator('.connection-pill.ready').waitFor({ timeout: 45000 });
     assert.equal((await page.evaluate(id => window.pi.agentTasks({ action: 'detail', id }), interrupted.id)).status, 'interrupted');
     await page.getByRole('button', { name: '子代理工作台', exact: true }).click(); agentsPanel = page.getByRole('dialog', { name: '子代理工作台', exact: true });
@@ -336,10 +345,10 @@ try {
   assert.equal(child.exitCode, 0);
   await waitForProcessExit(piPid);
   checks.push('窗口正常退出且所属 Pi 进程已结束');
-  await writeFile(resultFile, JSON.stringify({ success: true, mode, version, completedAt: new Date().toISOString(), executable, executableSha256, passed: checks, rendererErrors: errors, modelRequests: 0, ...details }, null, 2) + '\n');
+  await writeFile(resultFile, JSON.stringify({ success: true, mode, version, completedAt: new Date().toISOString(), executable, executableSha256, passed: checks, rendererErrors: errors, startup, modelRequests: 0, ...details }, null, 2) + '\n');
   console.log('Tauri closed cleanly.');
 } catch (error) {
-  await writeFile(resultFile, JSON.stringify({ success: false, mode, version, completedAt: new Date().toISOString(), executable, executableSha256, passed: checks, rendererErrors: errors, error: error.stack || String(error) }, null, 2) + '\n');
+  await writeFile(resultFile, JSON.stringify({ success: false, mode, version, completedAt: new Date().toISOString(), executable, executableSha256, passed: checks, rendererErrors: errors, startup, process: { pid: child.pid, exitCode: child.exitCode, signalCode: child.signalCode, spawnError, stdout, stderr }, error: error.stack || String(error) }, null, 2) + '\n');
   if (page) {
     await page.screenshot({ path: path.join(artifacts, 'tauri-failure.png') }).catch(() => {});
     console.error('UI failure:', (await page.locator('body').innerText().catch(() => '')).slice(-8000), errors);
@@ -348,7 +357,7 @@ try {
   throw error;
 } finally {
   if (browser) await browser.close().catch(() => {});
-  if (child.exitCode === null) {
+  if (child.pid && child.exitCode === null && child.signalCode === null) {
     const killer = spawn('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
     await once(killer, 'exit').catch(() => {});
   }

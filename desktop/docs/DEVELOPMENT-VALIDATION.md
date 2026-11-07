@@ -54,3 +54,9 @@ CI 的 Linux / Windows 两个 job 使用同一脚本，成功或失败均保留�
 ## 可选浏览器组件检查
 
 `npm run test:agents:ui` 使用独立的假任务数据，检查搜索、翻页、异步结果隔离、完整结果分页和归档交互；不连接真实 Pi。先 `npx playwright install chromium --only-shell`（Linux 按需加 `--with-deps`），或将 `PI_DESKTOP_CHROMIUM` 指向本机兼容的 Chromium 程序。证据在 `artifacts/agents-browser/`。运行环境拒绝浏览器启动或无法下载安装包时，记录为未完成，不计为通过；Windows 原生验收新增的 `scout-history-checks.mjs` 使用真实 Rust 桥接覆盖核心流程。
+
+## WebView2 启动诊断
+
+原生 UI 验收在普通环境最多等待 CDP 30 秒，在设置了 `CI` 的环境最多等待 120 秒；单次握手最多 5 秒，并受剩余总预算限制。初次启动和崩溃恢复使用同样的重试逻辑，进程退出或启动错误会提前失败，不会把超时当作通过。
+
+`tauri-ui-result.json` 的 `startup` 包含各次启动的端点、调试参数、尝试次数、耗时、首个及最后一个连接错误、进程状态与有限长度的标准输出/错误；成功连接还记录 WebView2 版本。等待期间约每 10 秒打印一次连接错误，CI 将其保存在 `webview2.log`。这能区分端口未监听、握手超时和原生进程提前退出；若仍失败，应据此继续定位，而不是仅延长等待或跳过 UI 验收。

@@ -25,3 +25,44 @@ export async function waitForProcessExit(pid, timeout = 5000) {
   }
   throw new Error(`Pi process ${pid} survived application shutdown`);
 }
+
+// Keep one overall deadline: a slow handshake must not consume an unbounded retry.
+export async function waitForCdp({ connect, url, processState, diagnostics = {},
+  timeout = process.env.CI ? 120000 : 30000, attemptTimeout = 5000,
+  retryDelay = 250, log = console.log, now = Date.now, sleep = delay }) {
+  const started = now();
+  const deadline = started + timeout;
+  Object.assign(diagnostics, { url, timeoutMs: timeout, attempts: 0 });
+  let nextLog = started;
+  const fail = reason => {
+    throw new Error(`${reason}\n${JSON.stringify(diagnostics, null, 2)}`);
+  };
+  while (now() < deadline) {
+    diagnostics.process = processState();
+    diagnostics.elapsedMs = now() - started;
+    if (diagnostics.process.spawnError || diagnostics.process.exitCode !== null || diagnostics.process.signalCode) {
+      fail('Tauri stopped before WebView2 CDP became available');
+    }
+    diagnostics.attempts++;
+    try {
+      const browser = await connect(url, { timeout: Math.min(attemptTimeout, deadline - now()) });
+      diagnostics.elapsedMs = now() - started;
+      diagnostics.process = processState();
+      diagnostics.connected = true;
+      log(`WebView2 CDP connected after ${diagnostics.elapsedMs}ms (${diagnostics.attempts} attempts)`);
+      return browser;
+    } catch (error) {
+      diagnostics.lastError = (error.stack || String(error)).slice(-8000);
+      diagnostics.firstError ??= diagnostics.lastError;
+      diagnostics.elapsedMs = now() - started;
+      if (now() >= nextLog) {
+        log(`Waiting for WebView2 CDP at ${url}: attempt ${diagnostics.attempts}, ${diagnostics.elapsedMs}/${timeout}ms\n${diagnostics.lastError}`);
+        nextLog = now() + 10000;
+      }
+    }
+    await sleep(Math.min(retryDelay, Math.max(0, deadline - now())));
+  }
+  diagnostics.elapsedMs = now() - started;
+  diagnostics.process = processState();
+  fail('WebView2 CDP unavailable');
+}
