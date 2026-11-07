@@ -1,3 +1,4 @@
+import { scoutHistoryChecks } from './scout-history-checks.mjs';
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
@@ -10,7 +11,7 @@ import os from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { debugEndpoint, waitForProcessExit } from './tauri-harness.mjs';
+import { debugEndpoint, waitForProcessExit, waitForCdp, holdSessionLease } from './tauri-harness.mjs';
 const root = path.resolve(import.meta.dirname, '..');
 const { version } = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
 const release = process.argv.includes('--release');
@@ -19,6 +20,8 @@ const mode = release ? 'release' : real ? 'real' : 'ui';
 const temp = await mkdtemp(path.join(os.tmpdir(), 'pi-tauri-ui-'));
 const work = real ? root : path.join(temp, '示例项目');
 const artifacts = path.join(root, 'artifacts');
+const leaseExecutable = path.join(root, 'src-tauri/target/debug/pi-session-lease.exe');
+const leaseRoot = path.join(temp, 'agent/desktop-session-locks');
 await mkdir(artifacts, { recursive: true });
 const resultFile = path.join(artifacts, `tauri-${mode}-result.json`);
 await writeFile(resultFile, JSON.stringify({ success: false, mode, version, startedAt: new Date().toISOString() }, null, 2) + '\n');
@@ -33,31 +36,45 @@ if (!real) {
 }
 const debug = await debugEndpoint();
 const env = { ...process.env, PI_DESKTOP_USER_DATA: path.join(temp,'profile'), PI_DESKTOP_WORKSPACE: work, WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: debug.args };
-delete env.PI_DESKTOP_DEBUG_PORT;
+// The fixture build passes this validated port through the WebView2 API,
+// which works even when elevated hosts ignore WEBVIEW2_* overrides.
+env.PI_DESKTOP_DEBUG_PORT = String(debug.port);
 if (!real) { env.PI_DESKTOP_TEST = '1'; env.PI_CODING_AGENT_DIR = path.join(temp, 'agent'); } else { delete env.PI_DESKTOP_TEST; }
 delete env.ELECTRON_RUN_AS_NODE;
 // WebView2 enables CDP only for this verification process, using a free port.
 const executable = path.join(root, release ? 'release/tauri/Pi Desktop.exe' : 'src-tauri/target/debug/pi-desktop.exe');
 const executableSha256 = createHash('sha256').update(await readFile(executable)).digest('hex');
-let child = spawn(executable, [], { cwd: root, env, windowsHide: false, stdio: ['ignore','pipe','pipe'] });
-let stderr = '', browser, page;
-child.stderr.on('data', bytes => { stderr = (stderr + bytes.toString()).slice(-10000); });
-child.stdout.on('data', () => {});
+let stderr = '', stdout = '', spawnError, browser, page;
+const startup = [];
+function launch() {
+  stderr = ''; stdout = ''; spawnError = undefined;
+  const process = spawn(executable, [], { cwd: root, env, windowsHide: false, stdio: ['ignore', 'pipe', 'pipe'] });
+  process.on('error', error => { spawnError = error.stack || String(error); });
+  process.stderr.on('data', bytes => { stderr = (stderr + bytes.toString()).slice(-10000); });
+  process.stdout.on('data', bytes => { stdout = (stdout + bytes.toString()).slice(-10000); });
+  return process;
+}
+let child = launch();
+async function connectWebView(phase) {
+  const diagnostics = { phase, executable, executableSha256, browserArguments: debug.args };
+  startup.push(diagnostics);
+  browser = await waitForCdp({
+    connect: (url, options) => chromium.connectOverCDP(url, options), url: debug.url, diagnostics,
+    processState: () => ({ pid: child.pid, exitCode: child.exitCode, signalCode: child.signalCode, spawnError, stdout, stderr }),
+  });
+  diagnostics.browserVersion = browser.version();
+  const context = browser.contexts()[0];
+  assert.ok(context, 'WebView2 CDP connected without a browser context');
+  page = context.pages()[0] || await context.waitForEvent('page', { timeout: 45000 });
+  page.on('pageerror', error => errors.push(error.message));
+}
 const errors = [], checks = [];
 let details = {};
 async function waitForSnapshot(predicate){const end=Date.now()+10000;while(Date.now()<end){const value=await page.evaluate(()=>window.pi.snapshot());if(predicate(value))return value;await delay(100);}throw new Error('Snapshot condition timed out');}
 async function waitForValue(read, predicate, timeout = 25000) { const deadline=Date.now()+timeout; let last; while(Date.now()<deadline){last=await read(); if(predicate(last))return last; await delay(100);} throw new Error(`UI state timed out: ${JSON.stringify(last).slice(0,2000)}`); }
 const waitForTasks = predicate => waitForValue(() => page.evaluate(() => window.pi.agentTasks()), predicate);
 try {
-  const deadline = Date.now() + 30000;
-  while (Date.now() < deadline) {
-    if (child.exitCode !== null) throw new Error(`Tauri exited: ${child.exitCode}\n${stderr}`);
-    try { browser = await chromium.connectOverCDP(debug.url, { timeout: 1000 }); break; } catch { await delay(250); }
-  }
-  assert.ok(browser, `WebView2 CDP unavailable\n${stderr}`);
-  const context = browser.contexts()[0];
-  page = context.pages()[0] || await context.waitForEvent('page');
-  page.on('pageerror', error => errors.push(error.message));
+  await connectWebView('initial');
   await page.locator('.connection-pill.ready').waitFor({ timeout: 45000 });
   const info = await page.evaluate(async () => ({ bootstrap: await window.pi.bootstrap(), diagnostics: await window.pi.diagnostics(), snapshot: await window.pi.snapshot() }));
   assert.equal(info.bootstrap.runtime, 'tauri'); assert.equal(info.bootstrap.version, version);
@@ -124,13 +141,25 @@ try {
     await page.getByLabel('会话名称', { exact: true }).fill('Tauri 验收会话');
     await page.getByRole('button', { name: '保存名称', exact: true }).click();
     await page.locator('.session-item').filter({ hasText: 'Tauri 验收会话' }).waitFor();
+    const renamedSession = (await page.evaluate(() => window.pi.snapshot())).state.sessionFile;
     await page.getByRole('button', { name: /新会话/ }).click();
     await page.getByRole('heading', { name: '今天，一起做点什么？', exact: true }).waitFor();
-    await page.locator('.session-item').filter({ hasText: 'Tauri 验收会话' }).click();
-    await page.getByRole('dialog',{name:'会话保护',exact:true}).waitFor();
-    await page.getByRole('button',{name:'复制为新会话',exact:true}).click();
-    await page.getByText('已完成检查。', { exact: true }).waitFor();
-    checks.push('会话索引、重命名、占用提示、副本恢复');
+    const originalSessionBytes = await readFile(renamedSession);
+    const releaseRenamed = await holdSessionLease(leaseExecutable, leaseRoot, renamedSession);
+    try {
+      const access = await page.evaluate(file => window.pi.sessionAccess(file), renamedSession);
+      assert.equal(access.available, false);
+      assert.match(access.reason, /另一个 Pi Desktop 占用/);
+      await page.locator('.session-item').filter({ hasText: 'Tauri 验收会话' }).click();
+      await page.getByRole('dialog', { name: '会话保护', exact: true }).waitFor();
+      await page.getByRole('button', { name: '复制为新会话', exact: true }).click();
+      await waitForSnapshot(snapshot => snapshot.state.sessionFile !== renamedSession && snapshot.messages.length > 0);
+      await page.getByText('已完成检查。', { exact: true }).waitFor();
+      assert.deepEqual(await readFile(renamedSession), originalSessionBytes);
+    } finally {
+      await releaseRenamed();
+    }
+    checks.push('会话索引、重命名、真实租约占用提示、副本恢复且原文件不变');
     await editor.evaluate(element => {
       const bytes = Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jh54AAAAASUVORK5CYII='), c => c.charCodeAt(0));
       const data = new DataTransfer(); data.items.add(new File([bytes], 'clipboard.png', { type: 'image/png' }));
@@ -209,13 +238,26 @@ try {
     assert.deepEqual(await readFile(saved.state.sessionFile),Buffer.concat([originalBytes,Buffer.from('\n')]));
     assert.match(await editor.inputValue(),/外部修改后待发送的草稿/);
     checks.push('外部文件变化拦截、保留草稿、原文件不被副本修改');
+    const crashedSession = (await page.evaluate(() => window.pi.snapshot())).state.sessionFile;
     await editor.fill('/crash-test');await editor.press('Enter');
     await page.locator('.connection-pill.error').waitFor();await editor.fill('断线后保留的草稿');
-    await page.getByRole('button',{name:'恢复会话',exact:true}).click();
-    await page.getByRole('dialog',{name:'会话保护',exact:true}).waitFor();
-    await page.getByRole('button',{name:'复制为新会话',exact:true}).click();
-    await page.locator('.connection-pill.ready').waitFor();assert.match(await editor.inputValue(),/断线后保留的草稿/);
-    checks.push('进程崩溃、恢复会话与断线草稿');
+    const crashedBytes = await readFile(crashedSession);
+    const releaseCrashed = await holdSessionLease(leaseExecutable, leaseRoot, crashedSession);
+    try {
+      const access = await page.evaluate(file => window.pi.sessionAccess(file), crashedSession);
+      assert.equal(access.available, false);
+      assert.match(access.reason, /另一个 Pi Desktop 占用/);
+      await page.getByRole('button', { name: '恢复会话', exact: true }).click();
+      await page.getByRole('dialog', { name: '会话保护', exact: true }).waitFor();
+      await page.getByRole('button', { name: '复制为新会话', exact: true }).click();
+      await page.locator('.connection-pill.ready').waitFor();
+      assert.match(await editor.inputValue(), /断线后保留的草稿/);
+      assert.notEqual((await page.evaluate(() => window.pi.snapshot())).state.sessionFile, crashedSession);
+      assert.deepEqual(await readFile(crashedSession), crashedBytes);
+    } finally {
+      await releaseCrashed();
+    }
+    checks.push('进程崩溃、被占用会话副本恢复与断线草稿');
     await page.getByRole('button', { name: '上下文管理', exact: true }).click();
     const contextPanel = page.getByRole('dialog', { name: '上下文管理', exact: true });
     await contextPanel.getByLabel('预留 tokens', { exact: true }).fill('40000');
@@ -303,12 +345,9 @@ try {
     const crashExit = once(child, 'exit');
     const killer = spawn('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true }); await once(killer, 'exit'); await crashExit;
     await Promise.all([beforeCrash.pid, ...(beforeCrash.agentPids || [])].map(pid => waitForProcessExit(pid)));
-    await browser.close().catch(() => {}); browser = null; page = null; stderr = '';
-    child = spawn(executable, [], { cwd: root, env, windowsHide: false, stdio: ['ignore', 'pipe', 'pipe'] });
-    child.stderr.on('data', bytes => { stderr = (stderr + bytes.toString()).slice(-10000); }); child.stdout.on('data', () => {});
-    const restartDeadline = Date.now() + 30000;
-    while (Date.now() < restartDeadline) { try { browser = await chromium.connectOverCDP(debug.url, { timeout: 1000 }); break; } catch { await delay(200); } }
-    assert.ok(browser, 'WebView2 did not restart'); page = browser.contexts()[0].pages()[0]; page.on('pageerror', error => errors.push(error.message));
+    await browser.close().catch(() => {}); browser = null; page = null;
+    child = launch();
+    await connectWebView('restart');
     await page.locator('.connection-pill.ready').waitFor({ timeout: 45000 });
     assert.equal((await page.evaluate(id => window.pi.agentTasks({ action: 'detail', id }), interrupted.id)).status, 'interrupted');
     await page.getByRole('button', { name: '子代理工作台', exact: true }).click(); agentsPanel = page.getByRole('dialog', { name: '子代理工作台', exact: true });
@@ -319,6 +358,7 @@ try {
     await writeFile(path.join(artifacts, 'v04-task-records.json'), JSON.stringify(await page.evaluate(() => window.pi.agentTasks()), null, 2) + '\n');
     await page.keyboard.press('Escape');
     checks.push('应用崩溃清理子进程、重启保留任务记录并继续子会话');
+    await scoutHistoryChecks(page, artifacts, checks, waitForValue);
     const rejected = await page.evaluate(async () => {
       try { await window.pi.command('bash', { command: 'echo forbidden' }); return false; } catch { return true; }
     });
@@ -334,10 +374,10 @@ try {
   assert.equal(child.exitCode, 0);
   await waitForProcessExit(piPid);
   checks.push('窗口正常退出且所属 Pi 进程已结束');
-  await writeFile(resultFile, JSON.stringify({ success: true, mode, version, completedAt: new Date().toISOString(), executable, executableSha256, passed: checks, rendererErrors: errors, modelRequests: 0, ...details }, null, 2) + '\n');
+  await writeFile(resultFile, JSON.stringify({ success: true, mode, version, completedAt: new Date().toISOString(), executable, executableSha256, passed: checks, rendererErrors: errors, startup, modelRequests: 0, ...details }, null, 2) + '\n');
   console.log('Tauri closed cleanly.');
 } catch (error) {
-  await writeFile(resultFile, JSON.stringify({ success: false, mode, version, completedAt: new Date().toISOString(), executable, executableSha256, passed: checks, rendererErrors: errors, error: error.stack || String(error) }, null, 2) + '\n');
+  await writeFile(resultFile, JSON.stringify({ success: false, mode, version, completedAt: new Date().toISOString(), executable, executableSha256, passed: checks, rendererErrors: errors, startup, process: { pid: child.pid, exitCode: child.exitCode, signalCode: child.signalCode, spawnError, stdout, stderr }, error: error.stack || String(error) }, null, 2) + '\n');
   if (page) {
     await page.screenshot({ path: path.join(artifacts, 'tauri-failure.png') }).catch(() => {});
     console.error('UI failure:', (await page.locator('body').innerText().catch(() => '')).slice(-8000), errors);
@@ -346,7 +386,7 @@ try {
   throw error;
 } finally {
   if (browser) await browser.close().catch(() => {});
-  if (child.exitCode === null) {
+  if (child.pid && child.exitCode === null && child.signalCode === null) {
     const killer = spawn('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
     await once(killer, 'exit').catch(() => {});
   }

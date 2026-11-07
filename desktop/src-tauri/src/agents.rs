@@ -58,6 +58,7 @@ pub struct Task {
     pub session_path: Option<PathBuf>,
     pub retry_of: Option<String>,
     pub attempts: u64,
+    pub archived_at: Option<u64>,
     pub output: String,
     pub partial: String,
     pub truncated: bool,
@@ -71,7 +72,7 @@ pub struct Task {
     last_saved: u64,
 }
 impl Task {
-    fn active(&self) -> bool {
+    pub(crate) fn active(&self) -> bool {
         matches!(
             self.status.as_str(),
             "queued" | "starting" | "running" | "cancelling"
@@ -90,6 +91,7 @@ impl Task {
                 "canResume".into(),
                 json!(
                     !self.active()
+                        && self.archived_at.is_none()
                         && self.status != "completed"
                         && self.session_path.as_ref().is_some_and(|p| p.is_file())
                 ),
@@ -142,7 +144,7 @@ impl Manager {
         files.sort_by_key(|entry| {
             std::cmp::Reverse(entry.metadata().ok().and_then(|m| m.modified().ok()))
         });
-        for entry in files.into_iter().take(300) {
+        for entry in files {
             let file = entry.path();
             let read = (|| -> Result<Task> {
                 if fs::metadata(&file)?.len() > 1024 * 1024 {
@@ -160,6 +162,7 @@ impl Manager {
                 Ok(mut task) => {
                     if task.active() {
                         task.status = "interrupted".into();
+                        task.archived_at = None;
                         task.finished_at = Some(now());
                         task.updated_at = now();
                         task.error =
@@ -223,10 +226,81 @@ impl Manager {
             .context("找不到该任务")
     }
     pub fn list(&self) -> Value {
+        self.query(&json!({}))
+            .expect("default history query is valid")
+    }
+    pub fn query(&self, data: &Value) -> Result<Value> {
+        let query: crate::agent_history::Query = serde_json::from_value(data.clone())?;
+        let page_size = query.page_size()?;
         let records = self.records.lock().unwrap();
-        let mut rows = records.values().collect::<Vec<_>>();
-        rows.sort_by_key(|task| std::cmp::Reverse(task.created_at));
-        json!({"tasks":rows.into_iter().take(300).map(|t|t.public(false)).collect::<Vec<_>>(),"concurrency":CONCURRENCY,"active":self.jobs.lock().unwrap().len(),"warnings":*self.warnings.lock().unwrap()})
+        let mut rows = records
+            .values()
+            .filter(|task| query.matches(task))
+            .collect::<Vec<_>>();
+        rows.sort_by(|a, b| {
+            b.created_at
+                .cmp(&a.created_at)
+                .then_with(|| a.id.cmp(&b.id))
+        });
+        let total = rows.len();
+        let total_pages = total.div_ceil(page_size).max(1);
+        let page = query.page.unwrap_or(1).min(total_pages);
+        Ok(
+            json!({"tasks":rows.into_iter().skip((page-1)*page_size).take(page_size).map(|t|t.public(false)).collect::<Vec<_>>(),
+            "total":total,"page":page,"pageSize":page_size,"totalPages":total_pages,
+            "concurrency":CONCURRENCY,"active":self.jobs.lock().unwrap().len(),"warnings":*self.warnings.lock().unwrap()}),
+        )
+    }
+    pub fn archive(&self, id: &str, archived: bool) -> Result<Value> {
+        let _admin = self.admin.lock().unwrap();
+        let mut records = self.records.lock().unwrap();
+        let old = records.get(id).context("找不到该任务")?;
+        if old.active() || self.jobs.lock().unwrap().contains_key(id) {
+            bail!("任务仍在运行或收尾，不能归档或恢复归档");
+        }
+        if archived && old.status != "completed" {
+            bail!("只能归档已完成任务；失败、取消和中断任务需保留以便恢复");
+        }
+        let mut task = old.clone();
+        task.archived_at = if archived { Some(now()) } else { None };
+        task.updated_at = now();
+        atomic_json(
+            &self.root.join(format!("{id}.json")),
+            &serde_json::to_value(&task)?,
+        )?;
+        let result = task.public(true);
+        records.insert(id.to_owned(), task);
+        Ok(result)
+    }
+    fn session_path(&self, task: &Task) -> Result<PathBuf> {
+        let root = workspace::canonical(&self.root)?;
+        let directory = workspace::canonical(&self.root.join(&task.id))?;
+        if directory != root.join(&task.id) {
+            bail!("任务目录不能指向其他位置");
+        }
+        let path = task.session_path.as_ref().context("没有保存的子会话")?;
+        let path = workspace::within_workspace(&directory, &path.to_string_lossy())?;
+        if !path.is_file() {
+            bail!("子会话不是文件");
+        }
+        Ok(path)
+    }
+    pub fn output(&self, id: &str, offset: usize, version: Option<&str>) -> Result<Value> {
+        let _admin = self.admin.lock().unwrap();
+        let task = self.task(id)?;
+        if task.active() || self.jobs.lock().unwrap().contains_key(id) {
+            bail!("任务结束后才能读取完整结果，运行中请查看实时预览");
+        }
+        let (text, actual_version, source) = if task.session_path.is_some() {
+            let path = self.session_path(&task)?;
+            let _lease = session_guard::acquire(&self.lease_root, &path)?;
+            let (text, version) = crate::agent_history::session_output(&path)?;
+            (text, version, "session")
+        } else {
+            let (text, version) = crate::agent_history::record_output(&task)?;
+            (text, version, "record")
+        };
+        crate::agent_history::output_page(&text, &actual_version, source, offset, version)
     }
     pub fn detail(&self, id: &str) -> Result<Value> {
         Ok(self.task(id)?.public(true))
@@ -238,6 +312,14 @@ impl Manager {
         retry_of: Option<String>,
     ) -> Result<Value> {
         let _admin = self.admin.lock().unwrap();
+        self.start_locked(spec, runner, retry_of)
+    }
+    fn start_locked(
+        self: &Arc<Self>,
+        spec: NewTask,
+        runner: Runner,
+        retry_of: Option<String>,
+    ) -> Result<Value> {
         let NewTask {
             task,
             cwd,
@@ -295,21 +377,16 @@ impl Manager {
         self.detail(&id)
     }
     pub fn retry(self: &Arc<Self>, id: &str, runner: Runner, resume: bool) -> Result<Value> {
+        let _admin = self.admin.lock().unwrap();
         let old = self.task(id)?;
-        if old.active() {
-            bail!("请先停止当前任务");
+        if old.archived_at.is_some() {
+            bail!("请先恢复归档任务");
+        }
+        if old.active() || self.jobs.lock().unwrap().contains_key(id) {
+            bail!("请先等待当前任务及进程收尾结束");
         }
         if resume {
-            let _admin = self.admin.lock().unwrap();
-            if self.task(id)?.active() {
-                bail!("任务已在运行");
-            }
-            let path = old
-                .session_path
-                .as_ref()
-                .filter(|p| p.is_file())
-                .context("没有可继续的已保存子会话，请重新运行")?;
-            workspace::within_workspace(&self.root, &path.to_string_lossy())?;
+            self.session_path(&old)?;
             self.update(id, true, |task| {
                 task.status = "queued".into();
                 task.error = None;
@@ -327,7 +404,7 @@ impl Manager {
             }
             self.detail(id)
         } else {
-            self.start(
+            self.start_locked(
                 NewTask {
                     task: old.task,
                     cwd: old.cwd,
@@ -736,12 +813,41 @@ pub fn definition(agent_dir: &Path) -> Result<Value> {
 mod tests {
     use super::*;
     #[test]
+    fn archive_rejects_completed_record_until_job_finishes_cleanup() {
+        let temp = tempfile::tempdir().unwrap();
+        let manager = Manager::new(temp.path().into(), temp.path().join("locks")).unwrap();
+        let id = Uuid::new_v4().to_string();
+        manager.records.lock().unwrap().insert(
+            id.clone(),
+            Task {
+                id: id.clone(),
+                status: "completed".into(),
+                ..Task::default()
+            },
+        );
+        let (signal, _) = watch::channel(false);
+        manager.jobs.lock().unwrap().insert(
+            id.clone(),
+            Arc::new(Job {
+                cancel: AtomicU8::new(0),
+                signal,
+                rpc: Mutex::new(None),
+                lease: Mutex::new(None),
+            }),
+        );
+        assert!(manager.archive(&id, true).is_err());
+        assert!(manager.output(&id, 0, None).is_err());
+        manager.jobs.lock().unwrap().remove(&id);
+        assert!(manager.archive(&id, true).is_ok());
+    }
+    #[test]
     fn interrupted_task_is_loaded_without_automatic_execution() {
         let dir = tempfile::tempdir().unwrap();
         let id = Uuid::new_v4().to_string();
         let task = Task {
             id: id.clone(),
             status: "running".into(),
+            archived_at: Some(1),
             output: "已完成的部分".into(),
             ..Task::default()
         };

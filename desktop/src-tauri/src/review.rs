@@ -213,11 +213,22 @@ pub async fn file_review(cwd: &Path, relative: &str, stage: &str) -> Result<Valu
     let patch = if untracked {
         String::new()
     } else {
+        let previous = change["previous"]
+            .as_str()
+            .filter(|_| stage == "staged" && code.first() == Some(&b'R'));
         let mut args = vec!["diff", "--no-ext-diff", "--no-textconv"];
         if stage == "staged" {
             args.push("--cached");
         }
+        if previous.is_some() {
+            args.push("--find-renames");
+        }
         args.extend(["--", relative]);
+        // Git needs both sides of a staged rename to avoid showing an addition.
+        // Working changes still compare only the new path against the index.
+        if let Some(previous) = previous {
+            args.push(previous);
+        }
         String::from_utf8_lossy(&git_bytes(&cwd, &args).await?).into_owned()
     };
     Ok(

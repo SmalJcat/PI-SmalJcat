@@ -938,7 +938,23 @@ impl Core {
         let (executable, prefix) = executable_for_connection(&preferences);
         let runner = crate::agents::Runner { executable, prefix };
         match operation {
-            "list" => Ok(self.agents.list()),
+            "list" => self.agents.query(&data),
+            "archive" | "restore" => self.agents.archive(id, operation == "archive"),
+            "output" => {
+                let offset = match data.get("offset") {
+                    None => 0,
+                    Some(value) => usize::try_from(value.as_u64().context("结果分页位置无效")?)?,
+                };
+                let version = data
+                    .get("version")
+                    .map(|v| v.as_str().context("结果版本无效"))
+                    .transpose()?
+                    .map(String::from);
+                let agents = self.agents.clone();
+                let id = id.to_owned();
+                tokio::task::spawn_blocking(move || agents.output(&id, offset, version.as_deref()))
+                    .await?
+            }
             "detail" => self.agents.detail(id),
             "definition" => {
                 let mut agent = crate::agents::definition(&self.agent_dir)?;

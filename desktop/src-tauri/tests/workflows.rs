@@ -105,3 +105,100 @@ fn guard_rejects_external_rewrite_before_mutation() -> Result<()> {
     assert!(guard.validate(0).is_err());
     Ok(())
 }
+
+#[tokio::test]
+async fn review_preserves_staged_renames_and_separates_working_edits() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    git(dir.path(), &["init"]).await?;
+    // Spaces and brackets must remain literal Git pathspecs.
+    let old = "old [draft].txt";
+    let new = "new [ready].txt";
+    let original = "first line\nsecond line\nthird line\n";
+    fs::write(dir.path().join(old), original)?;
+    git(dir.path(), &["add", "."]).await?;
+    git(
+        dir.path(),
+        &[
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-m",
+            "base",
+        ],
+    )
+    .await?;
+    git(dir.path(), &["mv", old, new]).await?;
+    // The patch must agree with status even when diff disables rename detection.
+    git(dir.path(), &["config", "status.renames", "true"]).await?;
+    git(dir.path(), &["config", "diff.renames", "false"]).await?;
+
+    let renamed = review::file_review(dir.path(), new, "staged").await?;
+    assert_eq!(renamed["old"]["content"], original);
+    assert_eq!(renamed["new"]["content"], original);
+    let patch = renamed["patch"].as_str().unwrap();
+    assert!(patch.contains(&format!("rename from {old}")), "{patch}");
+    assert!(patch.contains(&format!("rename to {new}")), "{patch}");
+    assert!(!patch.contains("new file mode"), "{patch}");
+
+    let staged = "first line\nsecond line\nstaged line\n";
+    fs::write(dir.path().join(new), staged)?;
+    git(dir.path(), &["add", "--", new]).await?;
+    fs::write(dir.path().join(new), "working edit\n")?;
+    let renamed = review::file_review(dir.path(), new, "staged").await?;
+    assert_eq!(renamed["old"]["content"], original);
+    assert_eq!(renamed["new"]["content"], staged);
+    let patch = renamed["patch"].as_str().unwrap();
+    assert!(patch.contains("rename from"), "{patch}");
+    assert!(patch.contains("-third line"), "{patch}");
+    assert!(patch.contains("+staged line"), "{patch}");
+    assert!(!patch.contains("working edit"), "{patch}");
+
+    let working = review::file_review(dir.path(), new, "working").await?;
+    assert_eq!(working["old"]["content"], staged);
+    assert_eq!(working["new"]["content"], "working edit\n");
+    let patch = working["patch"].as_str().unwrap();
+    assert!(patch.contains("+working edit"), "{patch}");
+    assert!(!patch.contains("rename from"), "{patch}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn review_rename_patch_is_relative_to_nested_workspace() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    git(dir.path(), &["init"]).await?;
+    let work = dir.path().join("project");
+    fs::create_dir(&work)?;
+    fs::write(work.join("old.txt"), "original\n")?;
+    fs::write(dir.path().join("unrelated.txt"), "outside workspace\n")?;
+    git(dir.path(), &["add", "."]).await?;
+    git(
+        dir.path(),
+        &[
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-m",
+            "base",
+        ],
+    )
+    .await?;
+    git(&work, &["mv", "old.txt", "new.txt"]).await?;
+    fs::write(dir.path().join("unrelated.txt"), "unrelated staged edit\n")?;
+    git(dir.path(), &["add", "unrelated.txt"]).await?;
+    let renamed = review::file_review(&work, "new.txt", "staged").await?;
+    assert_eq!(renamed["old"]["content"], "original\n");
+    assert_eq!(renamed["new"]["content"], "original\n");
+    let patch = renamed["patch"].as_str().unwrap();
+    assert!(patch.contains("rename from project/old.txt"), "{patch}");
+    assert!(patch.contains("rename to project/new.txt"), "{patch}");
+    assert!(!patch.contains("unrelated"), "{patch}");
+    Ok(())
+}

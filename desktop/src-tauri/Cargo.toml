@@ -61,3 +61,8 @@ path = "src/bin/pi-workspace-check.rs"
 lto = "thin"
 codegen-units = 1
 strip = true
+
+[[bin]]
+name = "pi-session-lease"
+path = "src/bin/pi-session-lease.rs"
+required-features = ["test-fixture"]

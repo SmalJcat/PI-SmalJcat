@@ -19,11 +19,15 @@
     "test:context": "node scripts/native.mjs cargo run --manifest-path src-tauri/Cargo.toml --no-default-features --bin pi-workspace-check",
     "test:agent:contract": "node tests/agent-contract.mjs",
     "package": "node scripts/native.mjs build --no-bundle && node scripts/stage-native.mjs",
-    "build:test": "npm run build && node scripts/native.mjs build --debug --no-bundle --features test-fixture",
+    "build:test": "npm run build && node scripts/native.mjs cargo build --manifest-path src-tauri/Cargo.toml --locked --no-default-features --features test-fixture --bin pi-session-lease && node scripts/native.mjs build --debug --no-bundle --features test-fixture",
     "legacy:dev": "node scripts/dev.mjs",
     "legacy:start": "electron .",
     "legacy:test:ui": "node tests/electron-smoke.mjs",
-    "legacy:package": "npm run build && electron-builder --win dir"
+    "legacy:package": "npm run build && electron-builder --win dir",
+    "check:cloud": "node scripts/verify.mjs cloud",
+    "check:windows": "node scripts/verify.mjs windows",
+    "test:agents:ui": "node tests/agents-browser.mjs",
+    "test:session-lease": "node scripts/native.mjs cargo build --manifest-path src-tauri/Cargo.toml --locked --no-default-features --features test-fixture --bin pi-session-lease && node tests/session-lease-check.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.12.4",

@@ -1,12 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
-import { Brain, Check, Copy, Layers, LoaderCircle, Play, RefreshCw, RotateCcw, Square, Users } from 'lucide-react';
+import { Brain, Check, Layers, LoaderCircle, RefreshCw, RotateCcw, Square } from 'lucide-react';
 import { Modal, RichText } from './components';
-import type { Model, Wire } from './types';
+import type { Wire } from './types';
 import './workspace-panels.css';
 
 const number = (value: unknown) => typeof value === 'number' ? value.toLocaleString() : '—';
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
-const activeStatuses = ['queued', 'starting', 'running', 'cancelling'];
 const statusLabels: Record<string, string> = { queued: '排队中', starting: '正在启动', running: '运行中', cancelling: '正在停止', completed: '已完成', failed: '失败', cancelled: '已取消', interrupted: '已中断' };
 const reasonLabels: Record<string, string> = { manual: '手动压缩', threshold: '自动阈值压缩', overflow: '上下文溢出恢复', history: '历史压缩' };
 const date = (row: Wire) => new Date(row.startedAt || row.timestamp || row.createdAt).toLocaleString();
@@ -66,49 +65,4 @@ export function ContextPanel({ onClose, onChanged }: { onClose: () => void; onCh
   </div></Modal>;
 }
 
-export function AgentsPanel({ models, ready, cwd, onClose, onReference, onOpenParent, mainBusy }: { models: Model[]; ready: boolean; cwd: string; onClose: () => void; onReference: (text: string) => void; onOpenParent: (path: string) => void; mainBusy: boolean }) {
-  const [data, setData] = useState<Wire>({ tasks: [], active: 0, concurrency: 4 }), [selected, setSelected] = useState(''), [detail, setDetail] = useState<Wire | null>(null);
-  const [definition, setDefinition] = useState<Wire | null>(null), [error, setError] = useState(''), [pending, setPending] = useState(false);
-  const [task, setTask] = useState(''), [batch, setBatch] = useState(false), [model, setModel] = useState(''), [thinking, setThinking] = useState('medium');
-  const [filter, setFilter] = useState('all'), [onlyWorkspace, setOnlyWorkspace] = useState(false), [copied, setCopied] = useState(false);
-  const createForm = useRef<HTMLFormElement>(null);
-  const selectedRef = useRef(selected), mounted = useRef(true), polling = useRef(false);
-  selectedRef.current = selected;
-  const refresh = async () => {
-    if (polling.current) return;
-    polling.current = true;
-    const id = selectedRef.current;
-    try {
-      const next = await window.pi.agentTasks({ action: 'list' });
-      if (!mounted.current) return;
-      setData(next);
-      if (id) { const value = await window.pi.agentTasks({ action: 'detail', id }); if (mounted.current && selectedRef.current === id) setDetail(value); }
-    } catch (error) { if (mounted.current) setError(errorText(error)); } finally { polling.current = false; }
-  };
-  useEffect(() => {
-    mounted.current = true; void refresh();
-    void window.pi.agentTasks({ action: 'definition' }).then(value => { if (mounted.current) { setDefinition(value); setThinking(value.thinking || 'medium'); } }).catch(error => { if (mounted.current) setError(errorText(error)); });
-    const timer = setInterval(() => void refresh(), 800); return () => { mounted.current = false; clearInterval(timer); };
-  }, []);
-  useEffect(() => { setDetail(null); if (selected) void window.pi.agentTasks({ action: 'detail', id: selected }).then(value => { if (mounted.current && selectedRef.current === selected) setDetail(value); }).catch(error => { if (mounted.current && selectedRef.current === selected) setError(errorText(error)); }); }, [selected]);
-  const operate = async (action: string, id?: string) => {
-    setPending(true); setError('');
-    try {
-      const tasks = batch ? task.split(/\r?\n/).map(text => text.trim()).filter(Boolean) : [task.trim()];
-      const result = await window.pi.agentTasks(action === 'start' ? { action, tasks, model: model === '@definition' ? '' : model, modelSource: model === '@definition' ? 'definition' : 'parent', thinking } : { action, id });
-      if (action === 'start') { setTask(''); setSelected(result.tasks[0].id); }
-      else if (result.id) { setSelected(result.id); setDetail(result); }
-      await refresh();
-    } catch (error) { setError(errorText(error)); } finally { setPending(false); }
-  };
-  const tasks: Wire[] = data.tasks || [];
-  const visible = tasks.filter(row => (!onlyWorkspace || row.cwd.replace(/\\/g, '/').toLowerCase() === cwd.replace(/\\/g, '/').toLowerCase()) && (filter === 'all' || filter === 'active' && activeStatuses.includes(row.status) || filter === 'completed' && row.status === 'completed' || filter === 'attention' && ['failed', 'interrupted', 'cancelled'].includes(row.status)));
-  const isActive = detail && activeStatuses.includes(detail.status);
-  const output = [detail?.output, detail?.partial].filter(Boolean).join('\n\n');
-  return <Modal title="子代理工作台" wide onClose={onClose}><div className="workspace-panel agents-panel">
-    <div className="workspace-panel-heading"><div><div className="panel-eyebrow"><Users size={15} />Default 探子</div><h3>让探索并行进行</h3><p>主 Agent 与探子拥有独立上下文。任务记录会保存在本机，中断后可手动继续。</p></div><div className="agents-toolbar"><button className="secondary-button" onClick={()=>createForm.current?.scrollIntoView({block:'start'})}>新任务</button><div className="agents-capacity"><strong>{data.active || 0}</strong><span>个后台任务<br />最多 {data.concurrency} 个并行</span></div></div></div>
-    {error && <div role="alert" className="notice error">{error}</div>}{data.warnings?.map((warning: string, index: number) => <div className="notice error" key={index}>{warning}</div>)}
-    <div className="agents-layout"><aside className="agent-task-sidebar"><form ref={createForm} className="agent-create" onSubmit={event => { event.preventDefault(); void operate('start'); }}><h4>派发只读任务</h4><textarea aria-label="探子任务" rows={4} placeholder="写清目标、检索范围，以及需要返回的文件路径和行号" value={task} onChange={event => setTask(event.target.value)} /><label className="panel-checkbox"><input aria-label="按行拆分任务" type="checkbox" checked={batch} onChange={e => setBatch(e.target.checked)} />每行一个任务，最多 8 项</label><label className="panel-field">模型<select aria-label="探子模型" value={model} onChange={event => setModel(event.target.value)}><option value="">跟随主模型</option>{definition?.model && <option value="@definition">default 配置 · {definition.model}</option>}{models.map(model => <option key={`${model.provider}/${model.id}`} value={`${model.provider}/${model.id}`}>{model.name} · {model.provider}</option>)}</select></label><label className="panel-field">思考强度<select aria-label="探子思考强度" value={thinking} onChange={e => setThinking(e.target.value)}>{['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'].map(level => <option key={level} value={level}>{level}</option>)}</select></label><button className="primary-button" disabled={pending || !ready || !task.trim()}>{pending ? <LoaderCircle size={14} className="spin" /> : <Play size={14} />}派发探子</button><p className="panel-help">权限：读取文件、搜索和列目录。代码修改与最终验证交由主 Agent。</p></form><div className="task-list-filters"><select aria-label="筛选探子状态" value={filter} onChange={e => setFilter(e.target.value)}><option value="all">全部任务</option><option value="active">进行中</option><option value="completed">已完成</option><option value="attention">需要处理</option></select><label><input type="checkbox" checked={onlyWorkspace} onChange={e => setOnlyWorkspace(e.target.checked)} />当前工作区</label></div><nav className="agent-task-list" aria-label="探子任务列表">{visible.map(row => <button className={`agent-task-row ${selected === row.id ? 'selected' : ''}`} data-status={row.status} data-task-id={row.id} key={row.id} onClick={() => setSelected(row.id)}><span className={`task-state ${row.status}`}>{statusLabels[row.status] || row.status}</span><strong>{row.task}</strong><small>{row.model}</small></button>)}{!visible.length && <p className="panel-empty-note">这里还没有匹配的任务。</p>}</nav></aside>
-      <section className="agent-task-detail">{detail ? <><div className="task-detail-heading"><div><span className={`task-state ${detail.status}`}>{statusLabels[detail.status] || detail.status}</span><h4>{detail.task}</h4><p>{detail.model} · {detail.thinking} · 第 {detail.attempts} 次运行</p></div><div className="panel-actions">{isActive ? <button className="secondary-button" disabled={pending || detail.status === 'cancelling'} onClick={() => void operate('cancel', detail.id)}><Square size={13} />取消任务</button> : <><button className="secondary-button" disabled={pending} onClick={() => void operate('retry', detail.id)}><RotateCcw size={13} />{detail.status === 'completed' ? '重新运行' : '重试任务'}</button>{detail.canResume && <button className="primary-button" disabled={pending} onClick={() => void operate('resume', detail.id)}><Play size={13} />继续会话</button>}</>}</div></div><div className="task-location"><span title={detail.cwd}>{detail.cwd}</span><button className="text-button" disabled={!detail.canOpenParent || mainBusy} onClick={() => onOpenParent(detail.parentSession)}>查看父会话</button></div><div className="task-usage"><span>输入 <b>{number(detail.usage?.tokens?.input)}</b></span><span>输出 <b>{number(detail.usage?.tokens?.output)}</b></span><span>缓存读取 <b>{number(detail.usage?.tokens?.cacheRead)}</b></span><span>费用 <b>{typeof detail.usage?.cost === 'number' ? `$${detail.usage.cost.toFixed(4)}` : '—'}</b></span></div>{detail.error && <p className="task-error">{detail.error}</p>}<div className="task-output-toolbar"><strong>{isActive ? '实时输出' : '任务结果'}</strong><div><button disabled={!output} onClick={() => void navigator.clipboard.writeText(output).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }).catch(error => setError(errorText(error)))}>{copied ? <Check size={13} /> : <Copy size={13} />}复制</button><button disabled={!output} onClick={() => onReference(`探子任务：${detail.task}\n工作区：${detail.cwd}\n\n${output.slice(0, 32000)}${output.length > 32000 ? '\n[更多结果见子代理工作台]' : ''}`)}>引用结果到消息</button></div></div><pre className="task-output" data-testid="task-output">{output || (isActive ? '等待探子输出…' : '暂无文本输出。')}</pre>{detail.truncated && <p className="panel-help">工作台展示前 128 KB 文本，完整历史保存在子会话中。</p>}{detail.tools?.length > 0 && <details className="task-tools"><summary>工具活动 · {detail.tools.length}</summary>{detail.tools.map((tool: Wire) => <div key={tool.id}><strong>{tool.name}</strong><span className={`task-state ${tool.status}`}>{statusLabels[tool.status] || tool.status}</span><code>{tool.args}</code>{tool.output && <pre>{tool.output}</pre>}</div>)}</details>}<div className="task-record-meta">创建于 {date(detail)} · 记录 {detail.id}</div></> : <div className="task-detail-empty"><Users size={32} /><h4>每个探子，独立推进</h4><p>从左侧派发任务，或让主 Agent 调用探子。<br />选择一项任务，查看实时输出和用量。</p><button className="text-button" onClick={() => void refresh()}><RefreshCw size={13} />刷新任务</button></div>}</section></div>
-  </div></Modal>;
-}
+export { AgentsPanel } from './AgentsPanel';
