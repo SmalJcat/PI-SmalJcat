@@ -23,7 +23,9 @@
     "legacy:dev": "node scripts/dev.mjs",
     "legacy:start": "electron .",
     "legacy:test:ui": "node tests/electron-smoke.mjs",
-    "legacy:package": "npm run build && electron-builder --win dir"
+    "legacy:package": "npm run build && electron-builder --win dir",
+    "check:cloud": "node scripts/verify.mjs cloud",
+    "check:windows": "node scripts/verify.mjs windows"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.12.4",

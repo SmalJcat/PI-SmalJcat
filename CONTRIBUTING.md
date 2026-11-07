@@ -27,3 +27,7 @@
 版本更新时同步 `desktop/package.json`、`package-lock.json`、`src-tauri/Cargo.toml`、`Cargo.lock` 与 `tauri.conf.json`。使用 `npm run package` 生成本地发布程序和版本 / SHA-256 清单。
 
 不提交 `.env`、API 密钥、认证文件、真实会话、客户端数据、`node_modules`、Rust target、发布程序或测试产物。新增配置示例只能使用占位值。当前历史 Electron 源码仅用于兼容与回归；新功能以 Rust / Tauri 实现为准。
+
+## 云端与 Windows 交接
+
+统一运行 `npm run check:cloud` 或 Windows 独立副本中的 `npm run check:windows`，保留源码摘要及结果。具体环境、隔离要求和精确提交传递方法见 [开发与验收流程](desktop/docs/DEVELOPMENT-VALIDATION.md)。
