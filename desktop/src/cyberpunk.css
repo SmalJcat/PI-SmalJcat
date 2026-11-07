@@ -156,3 +156,92 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .task-state.completed { background: #1c3933; }
 .task-state.failed { background: #3b2733; }
 .task-state.interrupted, .task-state.cancelled { background: #363141; color: #e2c2e7; }
+
+/* Workspace surfaces: hierarchy without invented task progress or controls. */
+.workspace-panel-heading { padding-bottom: 18px; border-bottom: 1px solid var(--border); }
+.panel-eyebrow { color: var(--accent); letter-spacing: .7px; }
+.workspace-panel-heading h3 { font-weight: 600; color: #f0f7fb; }
+.workspace-panel-heading p, .panel-help, .context-metrics small,
+.context-metrics span, .panel-field, .context-fields label,
+.agent-task-row small, .task-detail-heading p, .task-location,
+.task-usage span, .compaction-numbers { color: var(--muted); }
+.workspace-card, .mcp-card {
+  background: linear-gradient(140deg, #192c3ce6, #111e2ded);
+  border-color: #3c586c;
+  box-shadow: inset 0 1px #a2ecff12, 0 6px 18px #0002;
+}
+.workspace-card h4 { display: flex; align-items: center; gap: 8px; }
+.workspace-card h4::before { content: ''; width: 3px; height: 12px; background: var(--accent); border-radius: 2px; }
+.context-metrics { background: linear-gradient(110deg, #193242, #152233); border-color: #3d6076; }
+.context-metrics strong { color: #b1f4fa; font-weight: 500; }
+.context-meter progress { background: #23394c; }
+.context-meter progress::-webkit-progress-value { background: linear-gradient(90deg, #36b9ca, #8df4ef); }
+.context-meter progress::-moz-progress-bar { background: #5be3ef; }
+.context-meter > span { background: #f0b2de; box-shadow: 0 0 0 1px #0b1420; }
+.compaction-row { padding: 16px; margin-top: 10px; border: 1px solid var(--border); border-radius: 8px; background: #122130; }
+.compaction-heading { flex-wrap: wrap; }
+.compaction-row details > summary, .task-tools > summary { color: #b1e6ef; padding: 5px 0; }
+.workspace-panel textarea, .workspace-panel select, .workspace-panel input[type=number] {
+  background: #0c1825; border-color: #466176; color: var(--text);
+}
+.workspace-panel textarea::placeholder { color: var(--muted); }
+.agents-capacity { padding: 10px 14px; border: 1px solid #3b6375; border-radius: 9px; background: #17313d; }
+.agents-capacity strong { color: #b1f4fa; font-variant-numeric: tabular-nums; }
+.agents-capacity span { color: var(--muted); }
+.agents-layout { border-color: #3c586c; background: #0d1926; }
+.agent-task-sidebar { background: #101f2e; border-right-color: #3c586c; }
+.agent-create { background: linear-gradient(150deg, #1a2d3d, #122130); }
+.agent-create h4 { color: #c5f4f8; }
+.task-list-filters { background: #101e2b; border-bottom: 1px solid var(--border); }
+.agent-task-list { padding: 8px; }
+.agent-task-list .panel-empty-note { padding: 16px 8px; text-align: center; }
+.agent-task-row {
+  margin-bottom: 8px; border: 1px solid #355064; border-left-width: 3px;
+  border-radius: 8px; padding: 12px; background: #142535;
+}
+.agent-task-row:hover { background: #1c3547; border-color: #568196; }
+.agent-task-row.selected {
+  background: linear-gradient(110deg, #204555, #192d40);
+  border-color: #5897a7; border-left-color: var(--accent);
+  box-shadow: inset 0 1px #b2faff14, 0 0 10px #5be3ef0a;
+}
+.agent-task-row:focus-visible { outline-offset: 2px; }
+.agent-task-row strong { color: #e4f0f6; }
+.agent-task-detail { background: linear-gradient(145deg, #132333, #0d1926); }
+.task-detail-heading { border-bottom: 1px solid var(--border); padding-bottom: 16px; }
+.task-detail-heading h4 { font-size: 16px; color: #f0f7fb; }
+.task-location { margin-top: 0; border-top: 0; }
+.task-usage { background: #172d3e; border: 1px solid #345168; }
+.task-usage b { color: #cef3f7; font-variant-numeric: tabular-nums; }
+.task-output-toolbar { gap: 12px; flex-wrap: wrap; }
+.task-output-toolbar button { color: #a2e9f0; border-radius: 4px; padding: 4px; }
+.task-output-toolbar button:hover:not(:disabled) { background: var(--hover); }
+.task-output { background: #0a1622; border-color: #38566b; color: #d4e2ed; }
+.task-tools { border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; background: #122231; }
+.task-tools > div:last-child { border-bottom: 0; }
+.task-error { color: #ffb3af; background: #38252e; border: 1px solid #855363; }
+.task-state.queued { background: #283449; color: #c9dafa; }
+.task-state.cancelling { background: #3b3130; color: #f7d4a3; }
+.task-state { border: 1px solid currentColor; }
+.task-detail-empty { color: var(--muted); }
+.task-detail-empty > svg { color: var(--accent); }
+.mcp-card-heading { color: var(--accent); flex-wrap: wrap; }
+.mcp-card-heading strong { color: var(--text); min-width: 0; }
+.mcp-card-meta { color: var(--muted); flex-wrap: wrap; }
+.mcp-card pre { background: #38252e; color: #ffb3af; border: 1px solid #855363; }
+.mcp-state.needs-auth { color: #f7d4a3; background: #3b3130; }
+.mcp-state.connecting, .mcp-state.starting { color: #a0f0f5; background: #1b3d4c; }
+.mcp-state.disabled { color: #b9c9d7; background: #263445; }
+.preview-controls > button.selected, .line-gutter .selected-line { color: #d7fbff; background: #235164; }
+.preview-controls > button.selected { box-shadow: inset 0 -2px var(--accent); }
+.review-side-label { color: #c2e2ed; background: #172b3b; }
+.line-gutter { background: #112231; }
+@media (max-width: 1100px) {
+  .agents-panel .workspace-panel-heading { gap: 12px; }
+  .agents-toolbar { gap: 10px; }
+  .agents-capacity { padding: 8px 10px; }
+}
+@media (forced-colors: active) {
+  .agent-task-row.selected, .preview-controls > button.selected, .line-gutter .selected-line { outline: 2px solid Highlight; outline-offset: -2px; }
+  .context-meter > span { background: Highlight; }
+}

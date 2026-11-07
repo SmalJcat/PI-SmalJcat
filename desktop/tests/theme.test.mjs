@@ -19,3 +19,13 @@ test('theme keeps accessibility and opaque fallbacks',()=>{
  assert.match(theme,/forced-colors: active/);
  assert.match(theme,/button:focus-visible/);
 });
+test('task and connection status labels retain AA contrast',()=>{
+ const surfaces=[
+  ['c9dafa','283449'], ['a0f0f5','1b3d4c'], ['a1ebbb','1c3933'],
+  ['ffb3af','3b2733'], ['e2c2e7','363141'], ['f7d4a3','3b3130'],
+  ['b9c9d7','263445'], ['ffb3af','38252e'],
+ ];
+ for(const [text,background] of surfaces)assert(contrast(text,background)>=4.5,`${text} on ${background}`);
+ for(const status of ['queued','running','starting','completed','failed','interrupted','cancelled','cancelling'])
+  assert(theme.includes(`.task-state.${status}`),`missing ${status} treatment`);
+});
