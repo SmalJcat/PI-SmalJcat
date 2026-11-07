@@ -9,6 +9,7 @@ import { changeGroups } from './workflows.mjs';
 import { useComposerCompletions } from './ComposerCompletions';
 import './styles.css';
 import './workflows.css';
+import './cyberpunk.css';
 
 const basename = (value: string) => value?.split(/[\\/]/).filter(Boolean).pop() || '工作区';
 const samePath = (a?: string, b?: string) => a?.replace(/\\/g, '/').toLowerCase() === b?.replace(/\\/g, '/').toLowerCase();
