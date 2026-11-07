@@ -1,4 +1,4 @@
-# Pi Desktop 0.4 · Rust + Tauri
+# Pi Desktop 0.4.1 · Rust + Tauri
 
 为 Pi 1.5.0 构建的 Windows 桌面客户端。React / TypeScript 提供界面，Rust 管理 Pi RPC、进程、会话与本地文件，Tauri 2 使用系统 WebView2 显示窗口。
 
@@ -19,6 +19,12 @@ D:\PI\desktop\release\tauri\Pi Desktop.exe
 源码仓库构建的程序位于 `<repository>\desktop\release\tauri\Pi Desktop.exe`。上面的 `D:\PI` 是原开发机器的安装示例。`npm run package` 会同步程序到发布目录，校验复制后的 SHA-256，并生成 `release/tauri/release.json`，记录版本、程序大小、哈希和同步时间。桌面快捷方式始终指向此目录。
 
 旧版完整程序仍位于 `release/win-unpacked/Pi Desktop.exe`，可通过 **Pi Desktop (Electron)** 快捷方式回退。旧说明与验证记录保存在 `docs/ELECTRON-0.1*.md`。
+
+## 0.4.1 输入框候选菜单
+
+输入 `/` 查找技能、模板和扩展命令，输入 `@` 查找工作区文件。上下键循环选择，Tab 或 Enter 补全候选，不会在补全时发送消息；输入框只有完整命令时，Enter 保持直接执行的行为。Shift+Enter 始终换行，中文输入法组词阶段的 Enter 不选择候选也不发送。
+
+Esc 优先关闭候选菜单，包括文件搜索等待和空结果状态；菜单关闭后再按 Esc，才会停止运行中的任务。快速修改关键词或切换工作区后，旧搜索结果和旧错误不会覆盖当前候选。搜索期间按 Enter / Tab 不会发送尚未补全的文件引用。文件搜索失败、无匹配或结果不完整时会在菜单中显示原因。
 
 ## 0.4 新功能
 

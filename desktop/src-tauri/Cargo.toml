@@ -1,6 +1,6 @@
 [package]
 name = "pi-desktop"
-version = "0.4.0"
+version = "0.4.1"
 description = "Native desktop workspace for Pi"
 authors = ["Pi Desktop contributors"]
 license = "MIT"
@@ -61,3 +61,8 @@ path = "src/bin/pi-workspace-check.rs"
 lto = "thin"
 codegen-units = 1
 strip = true
+
+[[bin]]
+name = "pi-session-lease"
+path = "src/bin/pi-session-lease.rs"
+required-features = ["test-fixture"]

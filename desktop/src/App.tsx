@@ -5,7 +5,8 @@ import { emptyTranscript, loadTranscript, reduceTranscript } from './transcript.
 import { ExtensionDialog, FileTree, IconButton, Message, Modal, PiMark } from './components';
 import { FilePreview, McpPanel } from './ReviewPanel';
 import { ContextPanel, AgentsPanel } from './WorkspacePanels';
-import { mentionAt, insertReference, changeGroups } from './workflows.mjs';
+import { changeGroups } from './workflows.mjs';
+import { useComposerCompletions } from './ComposerCompletions';
 import './styles.css';
 import './workflows.css';
 
@@ -20,15 +21,12 @@ const readDraft = (key: string) => { try { return localStorage.getItem(key) || '
 export default function App() {
   const [preferences, setPreferences] = useState<Preferences>({ executable: '', lastWorkspace: '' });
   const [agentDirectory, setAgentDirectory] = useState('');
-  const [appVersion, setAppVersion] = useState('0.4.0');
+  const [appVersion, setAppVersion] = useState('0.4.1');
   const [workspacePanel, setWorkspacePanel] = useState<'context' | 'agents' | null>(null);
   const [mcpOpen,setMcpOpen]=useState(false);
   const [recovery,setRecovery]=useState<Wire|null>(null);
   const [conflict,setConflict]=useState<{path:string;reason:string}|null>(null);
   const [references,setReferences]=useState<string[]>([]);
-  const [mention,setMention]=useState<{query:string;start:number;end:number}|null>(null);
-  const [suggestedFiles,setSuggestedFiles]=useState<FileEntry[]>([]);
-  const [mentionIndex,setMentionIndex]=useState(0);
   const [review,setReview]=useState<Wire|null>(null);
   const [previewLine,setPreviewLine]=useState(1);
   const [cwd, setCwd] = useState('');
@@ -74,6 +72,15 @@ export default function App() {
   const title = state.sessionName || sessions.find(s => s.id === state.sessionId)?.name || '新会话';
   const showError = useCallback((error: unknown) => setNotice({ text: errorText(error), error: true }), []);
 
+  const completion = useComposerCompletions({
+    draft, setDraft, ready, scope: `${cwd}:${snapshot?.generation ?? 0}`, commands: snapshot?.commands || [], editor,
+    onReference: file => {
+      if (references.length >= 8 && !references.includes(file.path)) { showError('一次最多引用 8 个文件'); return false; }
+      setReferences(previous => [...new Set([...previous, file.path])]);
+      return true;
+    },
+  });
+
   const [fileTreeRevision,setFileTreeRevision]=useState(0);
   const refreshFiles = async () => {
     setFileTreeRevision(n=>n+1);
@@ -110,7 +117,7 @@ export default function App() {
       generation.current = next.generation;
       setCwd(next.cwd); setSnapshot(next); setTranscript(loadTranscript(next.messages, next.state.isStreaming || next.state.isCompacting));
       if(!preserveDraft){setDraft(readDraft(draftKey(next.cwd,next.state)));setAttachments([]);setReferences([]);}
-      setMention(null);setSuggestedFiles([]);setShowAllMessages(false);setConflict(null);setRecovery(null);
+      setShowAllMessages(false);setConflict(null);setRecovery(null);
       setConnection('ready'); setStatus(''); setFollowing(true);
       setPreferences(p => ({ ...p, lastWorkspace: next.cwd, recentWorkspaces: [next.cwd, ...(p.recentWorkspaces || []).filter(w => !samePath(w, next.cwd))].slice(0, 12) }));
       void refreshSessions(next.cwd); void refreshFiles();
@@ -177,7 +184,7 @@ export default function App() {
   }, [settings]);
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (document.querySelector('[role="dialog"]')) return;
+      if (e.defaultPrevented || e.isComposing || e.keyCode === 229 || document.querySelector('[role="dialog"]')) return;
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'n') { e.preventDefault(); if (!locked) void connect({ cwd }); }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'o') { e.preventDefault(); if (!locked) void chooseWorkspace(); }
       if ((e.ctrlKey || e.metaKey) && e.key === ',') { e.preventDefault(); setSettings(true); }
@@ -213,7 +220,7 @@ export default function App() {
     const images = attachments.filter(a => a.mimeType).map(a => ({ type: 'image', mimeType: a.mimeType, data: a.data }));
     if (images.length && !state.model?.input?.includes('image')) { showError('当前模型不支持图片，请切换到支持图片的模型。'); return; }
     const textFiles = attachments.filter(a => a.text !== undefined).map(a => `\n\n--- 附件：${a.path || a.name} ---\n${a.text}\n--- 附件结束 ---`).join('');
-    setSubmitting(true); setDraft(''); setAttachments([]); setReferences([]); setMention(null); setNotice(null); setFollowing(true);
+    setSubmitting(true); setDraft(''); setAttachments([]); setReferences([]); setNotice(null); setFollowing(true);
     try {
       const response = await window.pi.command('prompt', { message: `${original.trim() || '请查看附件。'}${textFiles}`, references:originalReferences, ...(images.length ? { images } : {}), ...(running ? { streamingBehavior: queueMode } : {}) });
       if (response?.disposition === 'handled') { setStatus(''); void refreshSnapshot(); }
@@ -240,12 +247,6 @@ export default function App() {
   const openPreview = async (file: string, diff = false, stage:'working'|'staged'='working',line=1) => {
     try {setPreviewLine(line);if(diff&&window.pi.review){const result=await window.pi.review(file,stage);setReview(result);setPreview({path:file,content:result.new.content,diff:true});}else{setReview(null);setPreview(await window.pi.preview(file));}}catch(error){showError(error);}
   };
-  const selectReference=(file:FileEntry)=>{
-    if(references.length>=8&&!references.includes(file.path)){showError('一次最多引用 8 个文件');return;}
-    if(mention){const result=insertReference(draft,mention,file.path);setDraft(result.text);setTimeout(()=>{editor.current?.focus();editor.current?.setSelectionRange(result.cursor,result.cursor);},0);}
-    setReferences(previous=>[...new Set([...previous,file.path])]);setMention(null);setSuggestedFiles([]);
-  };
-  useEffect(()=>{let cancelled=false;const timer=setTimeout(()=>{if(mention&&ready&&window.pi.searchFiles)void window.pi.searchFiles(mention.query).then(result=>{if(!cancelled){setSuggestedFiles(result.files);setMentionIndex(0);}}).catch(showError);else setSuggestedFiles([]);},120);return()=>{cancelled=true;clearTimeout(timer);};},[mention?.query,ready,cwd]);
   useEffect(()=>{const handler=(event:Event)=>{const detail=(event as CustomEvent).detail;void openPreview(detail.path,false,'working',detail.line);};window.addEventListener('pi:open-file',handler);return()=>window.removeEventListener('pi:open-file',handler);},[cwd]);
   useEffect(() => window.pi.onFileDrop?.(event => {
     setDragging(event.type === 'enter' || event.type === 'over');
@@ -256,7 +257,6 @@ export default function App() {
   const visibleSessions = sessions.filter(session => (allSessions || samePath(session.cwd, cwd)) && `${session.name} ${session.cwd}`.toLowerCase().includes(search.toLowerCase()));
   const visibleMessages = transcript.messages.filter((m: Wire) => m.role !== 'system' && m.role !== 'toolResult' && m.display !== false);
   const displayedMessages = showAllMessages ? visibleMessages : visibleMessages.slice(-100);
-  const commandMatches = draft.startsWith('/') && !draft.includes('\n') && !draft.includes(' ') ? (snapshot?.commands || []).filter(command => `/${command.name}`.toLowerCase().includes(draft.toLowerCase())).slice(0, 7) : [];
   const pendingCount = queue.steering.length + queue.followUp.length;
   const context = snapshot?.stats?.contextUsage;
 
@@ -284,11 +284,10 @@ export default function App() {
         {Object.values(widgets).some(lines => lines.length > 0) && <div className="extension-widgets">{Object.entries(widgets).map(([key, lines]) => lines.length ? <pre key={key}>{lines.join('\n')}</pre> : null)}</div>}
         {pendingCount > 0 && <div className="queue-banner"><Layers size={14} /><span>{queue.steering.length} 条补充指令 · {queue.followUp.length} 条后续消息</span><button onClick={() => { void window.pi.command('clear_queue').then((result: Wire) => { const restored = [...result.steering, ...result.followUp].join('\n\n'); setDraft(current => [current, restored].filter(Boolean).join('\n\n')); }).catch(showError); }}>取回编辑</button></div>}
         <div className={`composer ${dragging ? 'dragging' : ''}`} onDragOver={e => { e.preventDefault(); setDragging(true); }} onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragging(false); }} onDrop={e => { e.preventDefault(); setDragging(false); const paths = Array.from(e.dataTransfer.files).map(f => window.pi.pathForFile(f)).filter(Boolean); void window.pi.attachments(paths).then(addAttachments).catch(showError); }}>
-          {mention&&suggestedFiles.length>0&&<div className="command-menu mention-menu" role="listbox" aria-label="文件引用">{suggestedFiles.map((file,index)=><button role="option" aria-selected={index===mentionIndex} className={index===mentionIndex?'selected':''} key={file.path} onMouseDown={e=>e.preventDefault()} onClick={()=>selectReference(file)}><FilePlus2 size={14}/><strong>{file.name}</strong><span>{file.path}</span></button>)}</div>}
+          {completion.menu}
           {references.length>0&&<div className="reference-chips">{references.map(path=><span key={path}><FilePlus2 size={13}/>{path}<button aria-label={`移除引用 ${path}`} onClick={()=>setReferences(items=>items.filter(p=>p!==path))}><X size={12}/></button></span>)}<small>发送时附带文件文本</small></div>}
-          {commandMatches.length > 0 && !mention && <div className="command-menu">{commandMatches.map(command => <button key={command.name} onClick={() => { setDraft(`/${command.name} `); editor.current?.focus(); }}><Terminal size={14} /><strong>/{command.name}</strong><span>{command.description}</span></button>)}</div>}
           {attachments.length > 0 && <div className="attachments">{attachments.map((attachment, index) => <div className="attachment" key={`${attachment.name}-${index}`}>{attachment.mimeType ? <img src={`data:${attachment.mimeType};base64,${attachment.data}`} alt="" /> : <FilePlus2 size={18} />}<span>{attachment.name}<small>{Math.max(1, Math.round(attachment.size / 1024))} KB</small></span><IconButton label={`移除 ${attachment.name}`} onClick={() => setAttachments(items => items.filter((_, i) => i !== index))}><X size={13} /></IconButton></div>)}</div>}
-          <textarea ref={editor} aria-label="消息" placeholder={dragging ? '放开以添加文件或图片' : running ? '补充要求，或安排接下来的任务…' : '描述你的想法，或输入 / 使用技能与命令…'} rows={2} value={draft} onChange={e => {setDraft(e.target.value);setMention(mentionAt(e.target.value,e.target.selectionStart));}} onSelect={e=>{const el=e.currentTarget;setMention(mentionAt(el.value,el.selectionStart));}} onKeyDown={e => { if(e.nativeEvent.isComposing||e.keyCode===229)return;if(mention&&suggestedFiles.length){if(e.key==='ArrowDown'||e.key==='ArrowUp'){e.preventDefault();setMentionIndex(index=>(index+(e.key==='ArrowDown'?1:-1)+suggestedFiles.length)%suggestedFiles.length);return;}if(e.key==='Enter'||e.key==='Tab'){e.preventDefault();selectReference(suggestedFiles[mentionIndex]);return;}if(e.key==='Escape'){e.preventDefault();e.stopPropagation();setMention(null);return;}} if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && e.keyCode !== 229) { e.preventDefault(); void send(); } }} onPaste={e => { const images = Array.from(e.clipboardData.files).filter(file => file.type.startsWith('image/')); if (images.length) { e.preventDefault(); void pasteImages(images); } }} />
+          <textarea ref={editor} {...completion.inputProps} aria-label="消息" placeholder={dragging ? '放开以添加文件或图片' : running ? '补充要求，或安排接下来的任务…' : '描述你的想法，或输入 / 使用技能与命令…'} rows={2} value={draft} onKeyDown={e => { if(e.nativeEvent.isComposing||e.keyCode===229)return;if(completion.onKeyDown(e))return; if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && e.keyCode !== 229) { e.preventDefault(); void send(); } }} onPaste={e => { const images = Array.from(e.clipboardData.files).filter(file => file.type.startsWith('image/')); if (images.length) { e.preventDefault(); void pasteImages(images); } }} />
           <div className="composer-toolbar"><div className="composer-options"><IconButton label="添加附件" onClick={() => void chooseAttachments()}><Plus size={19} /></IconButton><span className="toolbar-divider" /><div className="model-select"><Code2 size={14} /><select aria-label="选择模型" disabled={!ready || locked} value={state.model ? `${state.model.provider}::${state.model.id}` : ''} onChange={e => { const selected = snapshot?.models.find(model => `${model.provider}::${model.id}` === e.target.value); if (selected) void change('set_model', { provider: selected.provider, modelId: selected.id }); }}>{!state.model && <option value="">选择模型</option>}{snapshot?.models.map(model => <option key={`${model.provider}::${model.id}`} value={`${model.provider}::${model.id}`}>{model.name || model.id} · {model.provider}</option>)}</select><ChevronDown size={12} /></div><div className="thinking-select"><Brain size={14} /><select aria-label="思考强度" disabled={!ready || locked} value={state.thinkingLevel || 'off'} onChange={e => void change('set_thinking_level', { level: e.target.value })}>{(snapshot?.levels || ['off']).map(level => <option key={level} value={level}>{thinkingNames[level] || level}</option>)}</select><ChevronDown size={12} /></div></div><div className="send-controls">{running && <select className="queue-select" aria-label="发送方式" value={queueMode} onChange={e => setQueueMode(e.target.value)}><option value="steer">补充指令</option><option value="followUp">完成后发送</option></select>}{running && <IconButton label="停止任务" disabled={actionPending} onClick={() => void stop()} className="stop-button"><Square size={15} fill="currentColor" /></IconButton>}<button className="send-button" aria-label="发送消息" title="发送 · Enter" onClick={() => void send()} disabled={!ready || submitting || actionPending || (!draft.trim() && !attachments.length)}>{submitting ? <LoaderCircle size={18} className="spin" /> : <ArrowUp size={20} />}</button></div></div>
         </div>
         <div className="composer-footer"><span><span className={`status-dot ${running ? 'busy' : ''}`} />{running ? status || '处理中' : connection === 'connecting' ? '正在连接…' : ready ? '本地工作区' : '未连接'}{Object.values(statuses).filter(Boolean).slice(0, 1).map(text => <span className="extension-status" key={text} title={text}> · {text}</span>)}</span>{connection === 'error' ? <button onClick={() => void connect({ cwd, sessionPath: state.sessionFile, preserveDraft:true })}>重新连接</button> : <span>{context?.percent != null && <span title={`${context.tokens?.toLocaleString()} / ${context.contextWindow?.toLocaleString()} tokens`}>上下文 {Math.round(context.percent)}%<span className="footer-divider">·</span></span>}<kbd>Enter</kbd> 发送<span className="footer-divider">·</span><kbd>Shift Enter</kbd> 换行</span>}</div>

@@ -1,6 +1,6 @@
 # PI-SmalJcat · Pi Desktop
 
-基于 Pi 1.5.0 的 Windows 桌面客户端，当前版本 **0.4.0**。React / TypeScript 提供界面，Rust + Tauri 2 管理 Pi RPC、进程和本地工作区。
+基于 Pi 1.5.0 的 Windows 桌面客户端，当前版本 **0.4.1**。React / TypeScript 提供界面，Rust + Tauri 2 管理 Pi RPC、进程和本地工作区。
 
 主要功能包括流式对话、会话保护与恢复、MCP 状态、文件引用与 Git 差异审阅、自动压缩管理，以及具有独立会话的只读子代理工作台。
 
