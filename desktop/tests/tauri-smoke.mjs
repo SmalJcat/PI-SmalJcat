@@ -1,3 +1,4 @@
+import { scoutHistoryChecks } from './scout-history-checks.mjs';
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
@@ -348,6 +349,7 @@ try {
     await writeFile(path.join(artifacts, 'v04-task-records.json'), JSON.stringify(await page.evaluate(() => window.pi.agentTasks()), null, 2) + '\n');
     await page.keyboard.press('Escape');
     checks.push('应用崩溃清理子进程、重启保留任务记录并继续子会话');
+    await scoutHistoryChecks(page, artifacts, checks, waitForValue);
     const rejected = await page.evaluate(async () => {
       try { await window.pi.command('bash', { command: 'echo forbidden' }); return false; } catch { return true; }
     });

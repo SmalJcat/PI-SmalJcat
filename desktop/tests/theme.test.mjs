@@ -29,3 +29,14 @@ test('task and connection status labels retain AA contrast',()=>{
  for(const status of ['queued','running','starting','completed','failed','interrupted','cancelled','cancelling'])
   assert(theme.includes(`.task-state.${status}`),`missing ${status} treatment`);
 });
+
+test('scout history controls inherit cyberpunk theme tokens',()=>{
+ const css=readFileSync(new URL('../src/workspace-panels.css',import.meta.url),'utf8');
+ const history=css.slice(css.indexOf('.task-list-filters input[type=search]'));
+ assert.match(history,/background:var\(--surface\)/);
+ assert.match(history,/background:var\(--panel\)/);
+ assert.match(history,/color:var\(--muted\)/);
+ assert.doesNotMatch(history,/#[0-9a-f]{3,8}\b/i);
+ const harness=readFileSync(new URL('agents-harness.tsx',import.meta.url),'utf8');
+ assert.match(harness,/cyberpunk\.css/);
+});
