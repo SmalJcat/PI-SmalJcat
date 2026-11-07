@@ -68,7 +68,7 @@ const start = command => {
     emit({ type: 'tool_execution_end', toolCallId: toolCall.id, toolName: 'read', result, isError: false, durationMs: 27 });
     completeMessage(message('toolResult', result.content, { toolCallId: toolCall.id, toolName: 'read', isError: false }));
     const failed = isScout && command.message.includes('[fixture-fail-agent]');
-    completeMessage(message('assistant', [{ type: 'text', text: failed ? '探子测试错误' : '已完成检查。\n\n- 工作区连接正常\n- 工具结果已收到\n\n```ts\nconst ready = true;\n```\n\n[不安全链接](javascript:alert(1))\n<img src="x" onerror="alert(1)">' }], { model: model.id, provider: model.provider, stopReason: failed ? 'error' : 'stop', ...(failed ? { errorMessage: 'fixture provider failed' } : {}), usage: { input: 100, output: 40, cacheRead: 10, cacheWrite: 0, totalTokens: 150, cost: { total: .0012 } } }));
+    completeMessage(message('assistant', [{ type: 'text', text: failed ? '探子测试错误' : isScout && command.message.includes('[fixture-long-agent]') ? '中文🙂'.repeat(20000) + 'RESULT_END' : '已完成检查。\n\n- 工作区连接正常\n- 工具结果已收到\n\n```ts\nconst ready = true;\n```\n\n[不安全链接](javascript:alert(1))\n<img src="x" onerror="alert(1)">' }], { model: model.id, provider: model.provider, stopReason: failed ? 'error' : 'stop', ...(failed ? { errorMessage: 'fixture provider failed' } : {}), usage: { input: 100, output: 40, cacheRead: 10, cacheWrite: 0, totalTokens: 150, cost: { total: .0012 } } }));
     active = false; emit({ type: 'agent_end', willRetry: false });
     const next = queue.steering.shift() || queue.followUp.shift();
     emit({ type: 'queue_update', ...queue });

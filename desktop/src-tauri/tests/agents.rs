@@ -223,3 +223,39 @@ async fn cancelling_a_parent_tool_does_not_cancel_manual_background_tasks() -> R
     manager.shutdown().await;
     result
 }
+
+#[tokio::test]
+async fn full_result_and_archive_preserve_a_real_fixture_session() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let manager = Manager::new(temp.path().join("tasks"), temp.path().join("locks"))?;
+    let task = start(&manager, temp.path(), "[fixture-long-agent]")?;
+    let id = task["id"].as_str().unwrap();
+    assert!(manager.archive(id, true).is_err());
+    assert!(manager.output(id, 0, None).is_err());
+    let finished = wait(&manager, |v| {
+        count(v, &["completed"]) == 1 && v["active"] == 0
+    })
+    .await;
+    manager.shutdown().await;
+    finished?;
+    let detail = manager.detail(id)?;
+    assert_eq!(detail["truncated"], true);
+    let session = PathBuf::from(detail["sessionPath"].as_str().unwrap());
+    let bytes = fs::read(&session)?;
+    let mut output = String::new();
+    let mut offset = Some(0);
+    let mut version = None;
+    while let Some(next) = offset {
+        let page = manager.output(id, next, version.as_deref())?;
+        output.push_str(page["text"].as_str().unwrap());
+        offset = page["nextOffset"].as_u64().map(|n| n as usize);
+        version = page["version"].as_str().map(String::from);
+    }
+    assert!(output.ends_with("RESULT_END"));
+    assert!(output.len() > 128 * 1024);
+    manager.archive(id, true)?;
+    assert!(manager.retry(id, runner(), false).is_err());
+    manager.archive(id, false)?;
+    assert_eq!(fs::read(session)?, bytes);
+    Ok(())
+}

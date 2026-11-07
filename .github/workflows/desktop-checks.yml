@@ -69,4 +69,5 @@ jobs:
             desktop/artifacts/tauri-ui-result.json
             desktop/artifacts/tauri-*.png
             desktop/artifacts/v04-*.png
+            desktop/artifacts/scout-history-*.png
           retention-days: 14

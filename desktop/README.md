@@ -34,7 +34,9 @@ D:\PI\desktop\release\tauri\Pi Desktop.exe
 
 主 Agent 可使用 `desktop_scout` 工具派发探子，这些任务与手动创建的任务显示在同一工作台。停止父任务会取消该工具派发的任务；手动创建的独立后台任务保留。旧 `subagent` 扩展保持兼容，其任务仍显示在普通工具卡片中，不纳入新工作台的逐任务控制。
 
-任务记录保存在客户端数据目录的 `agents/`，压缩尝试保存在 `context-attempts.json`。重新打开应用时，未结束的任务标记为中断，需要手动继续或重试；不会自动发起模型调用。任务列表展示最近 300 项，文本展示前 128 KB，工具活动保留最近 40 项，每次运行最长一小时。完整历史保存在任务专用的 Pi 会话中。运行中的费用为已返回用量，结束后以 Pi 会话统计为准。
+任务记录保存在客户端数据目录的 `agents/`，压缩尝试保存在 `context-attempts.json`。重新打开应用时，未结束的任务标记为中断，需要手动继续或重试；不会自动发起模型调用。任务列表支持搜索任务、模型、工作区或 ID，并组合状态、工作区与归档筛选；每页 10 / 20 / 50 / 100 项，旧于 300 项的有效记录仍可检索。实时预览展示前 128 KB，任务结束后可按 64 KiB 页查看当前子会话分支的完整文本回复（不含思考和工具结果）；复制当前页，引用最多 32,000 字符。单个子会话超过 64 MiB 或损坏时明确报错。工具活动保留最近 40 项，每次运行最长一小时。完整历史保存在任务专用的 Pi 会话中。
+
+已完成且进程退出的任务可归档及恢复，归档不删除会话、不释放磁盘空间。活跃、失败、取消和中断任务不能归档，保留用于恢复。本版本不提供永久删除；安全清理设计和新增接口见 [探子历史管理](docs/SCOUT-HISTORY.md)。运行中的费用为已返回用量，结束后以 Pi 会话统计为准。
 
 0.3 程序保留在 `release/tauri-0.3/Pi Desktop.exe`；说明与验收记录见 `docs/TAURI-0.3*.md`。
 
@@ -156,6 +158,8 @@ Rust 检查：
 node scripts/native.mjs cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --features test-fixture -- -D warnings
 node scripts/native.mjs cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
 ```
+
+云端与 Windows 独立副本可分别运行 `npm run check:cloud`、`npm run check:windows`，保存同一源码的验收日志和摘要，详见 [开发与验收流程](docs/DEVELOPMENT-VALIDATION.md)。可选的浏览器组件检查为 `npm run test:agents:ui`，使用 Playwright Chromium 的模拟桥接，不代替原生 WebView2 验收。
 
 构建脚本会补充当前用户 `.cargo/bin` 到子进程 PATH，无需修改系统 PATH。仓库默认使用 crates.io；如需本机镜像，可自行创建被 Git 忽略的 `.cargo/config.toml`，避免把个人网络配置强加给协作者。
 

@@ -50,3 +50,7 @@ CI 的 Linux / Windows 两个 job 使用同一脚本，成功或失败均保留�
 ## 重命名修复基线
 
 本地提交 `2407b0b` 修复已暂存重命名被补丁视为整文件新增，并新增两项回归测试。此前 Windows 独立副本报告 14 项 JS、29 项 Rust、24 项 WebView2 UI 测试通过；生产文件 blob 与云端一致，但回归测试是等价重建，属于既有参考证据。本流程后续要求传递并验证精确提交。
+
+## 可选浏览器组件检查
+
+`npm run test:agents:ui` 使用独立的假任务数据，检查搜索、翻页、异步结果隔离、完整结果分页和归档交互；不连接真实 Pi。先 `npx playwright install chromium --only-shell`（Linux 按需加 `--with-deps`），或将 `PI_DESKTOP_CHROMIUM` 指向本机兼容的 Chromium 程序。证据在 `artifacts/agents-browser/`。运行环境拒绝浏览器启动或无法下载安装包时，记录为未完成，不计为通过；Windows 原生验收新增的 `scout-history-checks.mjs` 使用真实 Rust 桥接覆盖核心流程。

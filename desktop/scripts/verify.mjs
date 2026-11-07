@@ -16,8 +16,11 @@ const directory = path.join(root, 'artifacts', 'verification', mode);
 mkdirSync(directory, { recursive: true });
 const git = args => execFileSync('git', args, { cwd: repository, encoding: 'utf8' }).trim();
 // Git clean filters normalize checkout line endings, so Windows and Linux agree.
-const files = git(['ls-files', '--cached', '--others', '--exclude-standard', '-z']).split('\0').filter(Boolean).sort();
-const sources = Object.fromEntries(files.map(file => [file, existsSync(path.join(repository, file)) ? git(['hash-object', `--path=${file}`, file]) : null]));
+const sourceSnapshot = () => {
+  const files = git(['ls-files', '--cached', '--others', '--exclude-standard', '-z']).split('\0').filter(Boolean).sort();
+  return Object.fromEntries(files.map(file => [file, existsSync(path.join(repository, file)) ? git(['hash-object', `--path=${file}`, file]) : null]));
+};
+const sources = sourceSnapshot();
 const report = {
   success: false, mode, platform: process.platform, node: process.version,
   version: JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')).version,
@@ -53,9 +56,14 @@ for (const [name, [command, ...args]] of checks) {
   });
   report.checks.push(result);
   save();
-  if (result.exitCode !== 0 || result.error) { process.exitCode = 1; break; }
+  if (result.exitCode !== 0 || result.error) {
+    if (process.env.GITHUB_ACTIONS) console.log(`::error title=${name} verification failed::See artifacts/verification/${mode}/${name}.log for diagnostics.`);
+    process.exitCode = 1; break;
+  }
 }
-report.success = report.checks.length === checks.length && report.checks.every(check => check.exitCode === 0 && !check.error);
+report.sourceUnchanged = JSON.stringify(sourceSnapshot()) === JSON.stringify(sources);
+if (!report.sourceUnchanged) { report.error = 'Source files changed during verification; rerun on an unchanged checkout.'; process.exitCode = 1; }
+report.success = report.sourceUnchanged && report.checks.length === checks.length && report.checks.every(check => check.exitCode === 0 && !check.error);
 report.finishedAt = new Date().toISOString();
 save();
 console.log(`Verification ${report.success ? 'passed' : 'failed'}: ${path.join(directory, 'result.json')}`);
