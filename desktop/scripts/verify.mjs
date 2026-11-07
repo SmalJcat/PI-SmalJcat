@@ -39,6 +39,7 @@ const checks = [
   ['build', npm('run', 'build')],
   ['javascript', npm('test')],
   ['rust', cargo('test', ...manifest, '--locked', '--no-default-features')],
+  ['session-lease', npm('run', 'test:session-lease')],
   ['format', cargo('fmt', ...manifest, '--', '--check')],
   ['clippy', cargo('clippy', ...manifest, '--locked', ...(mode === 'cloud' ? ['--no-default-features'] : []), '--all-targets', '--features', 'test-fixture', '--', '-D', 'warnings')],
   ...(mode === 'windows' ? [['webview2', npm('run', 'test:ui')]] : []),

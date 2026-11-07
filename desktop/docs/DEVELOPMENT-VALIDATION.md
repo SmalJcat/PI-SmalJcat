@@ -70,3 +70,9 @@ Microsoft [安全文档](https://learn.microsoft.com/en-us/microsoft-edge/webvie
 测试脚本现在将同一个随机端口通过 `PI_DESKTOP_DEBUG_PORT` 传入；只有 `test-fixture` 构建解析端口并调用 Tauri 的 `additional_browser_args` API。只接受 1–65535 的数字，固定绑定回环地址，不允许额外参数注入。生产构建不包含此路径。保留环境参数供已有非提升权限的非 fixture 验收使用，不写注册表、不关闭沙箱、不降级运行时，也不跳过 UI 检查。
 
 CI 的 `webview2-environment.json` 记录镜像、会话编号、UserInteractive、提升权限状态及已注册运行时版本。fixture 原生输出标记 run/setup/core/window 阶段，用于区分应用初始化阻塞和 CDP 参数问题。若仍失败，先核对这些证据；非交互会话是独立可能性，不能仅凭 ECONNREFUSED 就认定。此修复仍必须由新的 Windows CI 实跑确认。
+
+### 会话冲突的确定性前置条件
+
+run `42327880060` 已在约 2 秒连接 CDP。后续“会话保护”超时源于测试未创建占用者就要求冲突弹窗；干净 runner 正常恢复会话，本机若有无关 `pi.exe` 则会触发保守保护，掩盖这个前置条件缺失。
+
+UI 验收现在使用仅 `test-fixture` 可构建的 `pi-session-lease` 子进程，通过生产 `session_guard::acquire` 持有目标会话的真实租约。重命名后恢复与崩溃后恢复都先核对“另一个 Pi Desktop 占用”，再验证弹窗、副本路径及原文件字节不变，最后释放租约。父进程关闭 stdin 或退出时租约自动释放，不依赖用户机器上的其他 Pi 进程。`check:cloud` / `check:windows` 同时运行 `test:session-lease`，覆盖真实进程间锁冲突、释放后重新获取、原文件不变和启动失败。

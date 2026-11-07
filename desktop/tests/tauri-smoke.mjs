@@ -11,7 +11,7 @@ import os from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { debugEndpoint, waitForProcessExit, waitForCdp } from './tauri-harness.mjs';
+import { debugEndpoint, waitForProcessExit, waitForCdp, holdSessionLease } from './tauri-harness.mjs';
 const root = path.resolve(import.meta.dirname, '..');
 const { version } = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
 const release = process.argv.includes('--release');
@@ -20,6 +20,8 @@ const mode = release ? 'release' : real ? 'real' : 'ui';
 const temp = await mkdtemp(path.join(os.tmpdir(), 'pi-tauri-ui-'));
 const work = real ? root : path.join(temp, '示例项目');
 const artifacts = path.join(root, 'artifacts');
+const leaseExecutable = path.join(root, 'src-tauri/target/debug/pi-session-lease.exe');
+const leaseRoot = path.join(temp, 'agent/desktop-session-locks');
 await mkdir(artifacts, { recursive: true });
 const resultFile = path.join(artifacts, `tauri-${mode}-result.json`);
 await writeFile(resultFile, JSON.stringify({ success: false, mode, version, startedAt: new Date().toISOString() }, null, 2) + '\n');
@@ -139,13 +141,25 @@ try {
     await page.getByLabel('会话名称', { exact: true }).fill('Tauri 验收会话');
     await page.getByRole('button', { name: '保存名称', exact: true }).click();
     await page.locator('.session-item').filter({ hasText: 'Tauri 验收会话' }).waitFor();
+    const renamedSession = (await page.evaluate(() => window.pi.snapshot())).state.sessionFile;
     await page.getByRole('button', { name: /新会话/ }).click();
     await page.getByRole('heading', { name: '今天，一起做点什么？', exact: true }).waitFor();
-    await page.locator('.session-item').filter({ hasText: 'Tauri 验收会话' }).click();
-    await page.getByRole('dialog',{name:'会话保护',exact:true}).waitFor();
-    await page.getByRole('button',{name:'复制为新会话',exact:true}).click();
-    await page.getByText('已完成检查。', { exact: true }).waitFor();
-    checks.push('会话索引、重命名、占用提示、副本恢复');
+    const originalSessionBytes = await readFile(renamedSession);
+    const releaseRenamed = await holdSessionLease(leaseExecutable, leaseRoot, renamedSession);
+    try {
+      const access = await page.evaluate(file => window.pi.sessionAccess(file), renamedSession);
+      assert.equal(access.available, false);
+      assert.match(access.reason, /另一个 Pi Desktop 占用/);
+      await page.locator('.session-item').filter({ hasText: 'Tauri 验收会话' }).click();
+      await page.getByRole('dialog', { name: '会话保护', exact: true }).waitFor();
+      await page.getByRole('button', { name: '复制为新会话', exact: true }).click();
+      await waitForSnapshot(snapshot => snapshot.state.sessionFile !== renamedSession && snapshot.messages.length > 0);
+      await page.getByText('已完成检查。', { exact: true }).waitFor();
+      assert.deepEqual(await readFile(renamedSession), originalSessionBytes);
+    } finally {
+      await releaseRenamed();
+    }
+    checks.push('会话索引、重命名、真实租约占用提示、副本恢复且原文件不变');
     await editor.evaluate(element => {
       const bytes = Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jh54AAAAASUVORK5CYII='), c => c.charCodeAt(0));
       const data = new DataTransfer(); data.items.add(new File([bytes], 'clipboard.png', { type: 'image/png' }));
@@ -224,13 +238,26 @@ try {
     assert.deepEqual(await readFile(saved.state.sessionFile),Buffer.concat([originalBytes,Buffer.from('\n')]));
     assert.match(await editor.inputValue(),/外部修改后待发送的草稿/);
     checks.push('外部文件变化拦截、保留草稿、原文件不被副本修改');
+    const crashedSession = (await page.evaluate(() => window.pi.snapshot())).state.sessionFile;
     await editor.fill('/crash-test');await editor.press('Enter');
     await page.locator('.connection-pill.error').waitFor();await editor.fill('断线后保留的草稿');
-    await page.getByRole('button',{name:'恢复会话',exact:true}).click();
-    await page.getByRole('dialog',{name:'会话保护',exact:true}).waitFor();
-    await page.getByRole('button',{name:'复制为新会话',exact:true}).click();
-    await page.locator('.connection-pill.ready').waitFor();assert.match(await editor.inputValue(),/断线后保留的草稿/);
-    checks.push('进程崩溃、恢复会话与断线草稿');
+    const crashedBytes = await readFile(crashedSession);
+    const releaseCrashed = await holdSessionLease(leaseExecutable, leaseRoot, crashedSession);
+    try {
+      const access = await page.evaluate(file => window.pi.sessionAccess(file), crashedSession);
+      assert.equal(access.available, false);
+      assert.match(access.reason, /另一个 Pi Desktop 占用/);
+      await page.getByRole('button', { name: '恢复会话', exact: true }).click();
+      await page.getByRole('dialog', { name: '会话保护', exact: true }).waitFor();
+      await page.getByRole('button', { name: '复制为新会话', exact: true }).click();
+      await page.locator('.connection-pill.ready').waitFor();
+      assert.match(await editor.inputValue(), /断线后保留的草稿/);
+      assert.notEqual((await page.evaluate(() => window.pi.snapshot())).state.sessionFile, crashedSession);
+      assert.deepEqual(await readFile(crashedSession), crashedBytes);
+    } finally {
+      await releaseCrashed();
+    }
+    checks.push('进程崩溃、被占用会话副本恢复与断线草稿');
     await page.getByRole('button', { name: '上下文管理', exact: true }).click();
     const contextPanel = page.getByRole('dialog', { name: '上下文管理', exact: true });
     await contextPanel.getByLabel('预留 tokens', { exact: true }).fill('40000');
