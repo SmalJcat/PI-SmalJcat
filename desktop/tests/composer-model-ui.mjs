@@ -57,7 +57,7 @@ export async function composerModelChecks(page, artifacts, checks) {
   await page.waitForFunction(async () => (await window.pi.snapshot()).state.thinkingLevel === 'high');
   await page.waitForFunction(() => document.querySelector('[aria-label="推理强度"]')?.getAttribute('aria-valuetext') === '高');
   await page.screenshot({ path: path.join(artifacts, 'v053-composer-popup.png') });
-  const area = await page.locator('.composer-area').boundingBox(), popup = await panel.boundingBox();
+  const area = await page.locator('.composer-area:visible').boundingBox(), popup = await panel.boundingBox();
   const x = Math.min(area.x, popup.x), y = Math.min(area.y, popup.y);
   await page.screenshot({ path: path.join(artifacts, 'v053-composer-detail.png'), clip: { x, y, width: Math.max(area.x + area.width, popup.x + popup.width) - x, height: Math.max(area.y + area.height, popup.y + popup.height) - y } });
   const original = await page.evaluate(() => ({ width: innerWidth, height: innerHeight }));

@@ -1,4 +1,4 @@
-import { antigravityChecks } from './antigravity-ui.mjs';
+import { antigravityChecks, officialAntigravityChecks } from './antigravity-ui.mjs';
 import { composerModelChecks } from './composer-model-ui.mjs';
 import { overflowChecks } from './overflow-ui.mjs';
 import { layoutChecks } from './layout-ui.mjs';
@@ -88,6 +88,7 @@ try {
     details.context = { modelKey: contextState.modelKey, enabled: contextState.enabled, reserveTokens: contextState.settings.reserveTokens, keepRecentTokens: contextState.settings.keepRecentTokens, triggerTokens: contextState.triggerTokens };
     console.log(JSON.stringify({mcpServers:mcp.servers.map(server=>({name:server.name,state:server.state,tools:server.tools}))}));
     console.log(JSON.stringify({ realPi: true, runtime: info.bootstrap.runtime, modelCount: info.snapshot.models.length, commandCount: info.snapshot.commands.length, workspace: info.snapshot.cwd, nodeIntegration: false }, null, 2));
+    if (process.argv.includes('--antigravity')) details.antigravity = await officialAntigravityChecks(page, artifacts, checks, waitForValue, waitForProcessExit);
   } else {
     await page.getByRole('button', { name: 'README.md', exact: true }).click();
     await page.getByRole('dialog').locator('.numbered-code').getByText('这是文件预览内容。', { exact: false }).waitFor();

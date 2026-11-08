@@ -17,8 +17,19 @@ export async function layoutChecks(page, artifacts, checks) {
   const before = await geometry();
   assert.equal(before.length, 4);
   assert.ok(before.every((rect, index) => rect.height >= 32 && rect.x === before[0].x && (index === 0 || rect.y >= before[index - 1].y + before[index - 1].height)), 'Cold navigation is a stable vertical list');
-  const welcome = await page.locator('.welcome').boundingBox(), composer = await page.locator('.composer-context').boundingBox();
+  const welcome = await page.locator('.welcome').boundingBox(), composer = await page.locator('.composer-context:visible').boundingBox();
   assert.ok(composer.y >= welcome.y + welcome.height - 1 && composer.y - welcome.y - welcome.height < 48, 'Welcome and composer stay adjacent');
+  await page.getByRole('button', { name: 'Antigravity 会话', exact: true }).click();
+  const acp = page.getByRole('main', { name: 'Antigravity 会话', exact: true });
+  await acp.waitFor();
+  assert.equal(await page.getByRole('main').count(), 1, 'The empty Pi welcome must not override backend visibility');
+  assert.equal(await page.locator('.welcome').isVisible(), false);
+  const acpBox = await acp.boundingBox(), sidebar = await page.locator('.sidebar').boundingBox();
+  assert.ok(acpBox.x >= sidebar.x + sidebar.width - 1 && acpBox.width > 700 && acpBox.y < 100, JSON.stringify(acpBox));
+  await acp.getByRole('button', { name: '返回 Pi', exact: true }).click();
+  await page.locator('.welcome').waitFor();
+  assert.equal(await page.getByRole('main').count(), 1);
+  checks.push('空 Pi 会话切换 Antigravity 只显示一个主区，返回后欢迎页恢复');
   await page.screenshot({ path: path.join(artifacts, 'v051-home.png') });
   for (const label of ['子代理工作台', '上下文管理']) {
     await page.getByRole('button', { name: label, exact: true }).click();

@@ -1,6 +1,37 @@
 import assert from 'node:assert/strict';
 import path from 'node:path';
 
+// Explicit opt-in: connect the packaged desktop to cached official login without a prompt.
+export async function officialAntigravityChecks(page, artifacts, checks, waitForValue, waitForProcessExit) {
+  await page.getByRole('button', { name: 'Antigravity 会话', exact: true }).click();
+  const panel = page.getByRole('main', { name: 'Antigravity 会话', exact: true });
+  await panel.waitFor();
+  assert.equal(await page.getByRole('main').count(), 1, 'Only the ACP main pane should be visible in the packaged desktop');
+  const box = await panel.boundingBox(), sidebar = await page.locator('.sidebar').boundingBox();
+  assert.ok(box.x >= sidebar.x + sidebar.width - 1 && box.width > 700 && box.y < 100, JSON.stringify(box));
+  await panel.getByRole('button', { name: '连接已有登录', exact: true }).click();
+  const status = () => page.evaluate(() => window.pi.antigravity({ action: 'status' }));
+  let state = await waitForValue(status, state => state.connected && !state.connecting && state.sessionId, 90000);
+  assert.equal(state.agentInfo.name, 'Antigravity ACP Server');
+  const modelOption = state.configOptions.find(option => option.category === 'model');
+  const available = modelOption.options.flatMap(option => option.options || [option]);
+  const chosen = available.find(option => option.value === 'claude-opus-5-5') || available[0];
+  await panel.getByRole('button', { name: '模型与推理强度', exact: true }).click();
+  const models = page.getByRole('dialog', { name: '模型与推理设置', exact: true });
+  await models.getByRole('button', { name: '选择模型', exact: true }).click();
+  await models.locator(`[data-model-key="antigravity::${chosen.value}"]`).click();
+  state = await waitForValue(status, state => state.configOptions.find(option => option.category === 'model').currentValue === chosen.value);
+  await page.screenshot({ path: path.join(artifacts, 'v060-official-desktop.png') });
+  await page.keyboard.press('Escape');
+  const pid = state.pid;
+  await panel.getByRole('button', { name: '断开', exact: true }).click();
+  await waitForValue(status, state => !state.connected);
+  await waitForProcessExit(pid);
+  await panel.getByRole('button', { name: '返回 Pi', exact: true }).click();
+  checks.push('正式桌面连接官方 ACP/已缓存登录、真实模型列表与设置、断开后进程退出（模型请求 0）');
+  return { agent: state.agentInfo, selectedModel: chosen.value, models: available.map(option => option.value), modelRequests: 0 };
+}
+
 export async function antigravityChecks(page, artifacts, checks, waitForValue, waitForProcessExit) {
   const before = await page.evaluate(() => window.pi.snapshot());
   const piDraft = page.getByRole('textbox', { name: '消息', exact: true });

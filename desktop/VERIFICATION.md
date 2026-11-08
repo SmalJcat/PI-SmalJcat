@@ -4,7 +4,7 @@
 
 - 新增独立 ACP v1 后端、主区和受管理子进程，复用官方 CLI 的已有登录。桥接、权限、历史与当前边界见 [接入说明](docs/ANTIGRAVITY-ACP.md)。
 - JavaScript 104 项通过；Rust 138 项通过、2 项本机服务测试默认跳过；TypeScript/Vite、全目标 test-fixture 严格 Clippy 与格式检查通过。新增后端集成覆盖真实子进程握手、配置、Unicode 流式、缓存恢复、load 重放不重复、显式权限/非法选项、取消等待、取消超时与异常退出；额外验证旧取消 watchdog 不会杀死下一轮任务。
-- 12:03 HKT 真实 WebView2 + 模拟 Pi/ACP 验收 51 项通过，渲染错误 0，fixture 模型调用 0。新增权限允许/拒绝、模型/档位写入、新建/恢复、Pi/ACP 草稿与会话隔离、发送回执前编辑保留、取消权限、1024px 小窗口、断开后的 PID 退出检查。强制结束测试桌面父进程时不使用 `/T`，验证 Windows Job 清理 Pi 与 ACP 子进程。
+- 12:18 HKT 真实 WebView2 + 模拟 Pi/ACP 最终验收 52 项通过，渲染错误 0，fixture 模型调用 0。新增空 Pi 会话与 Antigravity 的单主区可见性/几何检查，以及权限允许/拒绝、模型/档位写入、新建/恢复、Pi/ACP 草稿与会话隔离、发送回执前编辑保留、取消权限、1024px 小窗口、断开后的 PID 退出检查。强制结束测试桌面父进程时不使用 `/T`，验证 Windows Job 清理 Pi 与 ACP 子进程。首次正式版截图发现欢迎页 display 覆盖隐藏状态，已提高状态隐藏规则优先级并补空会话回归；测试几何只针对可见主区。
 - 使用本机官方 Antigravity CLI 1.5.3 完成一次真实 Claude Opus 5.5 只读任务：只读临时目录 README，回复其中的标记；未改项目或账号配置。此任务消耗官方 CLI 对应的模型用量，可能含内部工具轮次；与 fixture 的零调用记录分开。另验证了真实 initialize、模型/档位配置、session/list 和新建后恢复（额外模型调用 0）。记录：`artifacts/v060-official-acp.log`、`v060-official-metadata.log`。
 - 已查看 `artifacts/v060-antigravity.png`，窄窗口截图为 `v060-antigravity-small.png`；完整本地回执/日志在 `tauri-ui-result.json`、`v060-ui.log`、`v060-js.log`、`v060-rust.log` 与 `v060-acp-tests.log`。测试产物、用户 CLI 凭据和会话不提交 Git。
 
