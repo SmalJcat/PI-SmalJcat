@@ -1,3 +1,4 @@
+import { openModelPanel } from './composer-model-ui.mjs';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 
@@ -29,10 +30,11 @@ export async function overflowChecks(page, artifacts, checks) {
     assert.equal(await error.innerText(), expected, 'Long error must remain complete');
     await page.screenshot({ path: path.join(artifacts, `v052-error-${width}.png`) });
   }
-  const model = page.getByLabel('选择模型', { exact: true });
+  const panel = await openModelPanel(page);
+  await panel.getByRole('button', { name: '选择模型', exact: true }).click();
   for (const theme of ['chatgpt', 'cyberpunk', 'classic']) {
     await page.evaluate(theme => { if (theme === 'classic') delete document.documentElement.dataset.ui; else document.documentElement.dataset.ui = theme; }, theme);
-    const colors = await model.locator('option').first().evaluate(option => {
+    const colors = await panel.getByRole('option').last().evaluate(option => {
       const style = getComputedStyle(option);
       return { foreground: style.color, background: style.backgroundColor };
     });
@@ -42,12 +44,11 @@ export async function overflowChecks(page, artifacts, checks) {
     assert.ok((Math.max(l1, l2) + .05) / (Math.min(l1, l2) + .05) >= 4.5, `${theme}: ${JSON.stringify(colors)}`);
   }
   await page.evaluate(theme => { if (theme) document.documentElement.dataset.ui = theme; else delete document.documentElement.dataset.ui; }, original.theme);
-  await model.focus();
-  await model.press('Alt+ArrowDown');
+
   await page.screenshot({ path: path.join(artifacts, 'v052-model-menu.png') });
-  await model.press('Escape');
+  await page.keyboard.press('Escape');
   await page.getByRole('button', { name: '关闭提示', exact: true }).click();
   await page.setViewportSize({ width: original.width, height: original.height });
   checks.push('长 URL/JSON 错误与通知在 1440px/1024px 内完整换行，代码块仅内部滚动');
-  checks.push('三种主题原生模型选项具备不透明背景及至少 4.5:1 文字对比度');
+  checks.push('三种主题模型面板选项具备不透明背景及至少 4.5:1 文字对比度');
 }

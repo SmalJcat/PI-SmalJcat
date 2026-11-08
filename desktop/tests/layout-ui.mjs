@@ -17,7 +17,7 @@ export async function layoutChecks(page, artifacts, checks) {
   const before = await geometry();
   assert.equal(before.length, 3);
   assert.ok(before.every((rect, index) => rect.height >= 32 && rect.x === before[0].x && (index === 0 || rect.y >= before[index - 1].y + before[index - 1].height)), 'Cold navigation is a stable vertical list');
-  const welcome = await page.locator('.welcome').boundingBox(), composer = await page.locator('.composer').boundingBox();
+  const welcome = await page.locator('.welcome').boundingBox(), composer = await page.locator('.composer-context').boundingBox();
   assert.ok(composer.y >= welcome.y + welcome.height - 1 && composer.y - welcome.y - welcome.height < 48, 'Welcome and composer stay adjacent');
   await page.screenshot({ path: path.join(artifacts, 'v051-home.png') });
   for (const label of ['子代理工作台', '上下文管理']) {

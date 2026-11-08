@@ -1,3 +1,4 @@
+import { composerModelChecks } from './composer-model-ui.mjs';
 import { overflowChecks } from './overflow-ui.mjs';
 import { layoutChecks } from './layout-ui.mjs';
 import { scoutHistoryChecks } from './scout-history-checks.mjs';
@@ -170,11 +171,7 @@ try {
     assert.ok(startup.totalMs > 0 && startup.totalMs < 30000, '启动总耗时应当在合理区间：' + startup.totalMs);
     const breakdown = stages.map(stage => stage.name + ' ' + stage.atMs).join(' · ');
     checks.push('启动耗时（总计 ' + startup.totalMs + 'ms｜' + breakdown + '）');
-    await page.getByLabel('选择模型', { exact: true }).selectOption('fixture::fixture-fast');
-    await page.waitForFunction(() => document.querySelector('select[aria-label="思考强度"]').value === 'off');
-    await page.getByLabel('选择模型', { exact: true }).selectOption('fixture::fixture-model');
-    await page.getByLabel('思考强度', { exact: true }).selectOption('high');
-    await page.waitForFunction(() => document.querySelector('select[aria-label="思考强度"]').value === 'high');
+    await composerModelChecks(page, artifacts, checks);
     checks.push('模型和思考强度');
     await editor.fill('/confirm-test'); await editor.press('Enter');
     await page.getByRole('dialog', { name: '是否继续测试？', exact: true }).waitFor();

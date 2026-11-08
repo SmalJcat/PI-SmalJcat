@@ -1,4 +1,4 @@
-# Pi Desktop 0.5.2 · Rust + Tauri
+# Pi Desktop 0.5.3 · Rust + Tauri
 
 为 Pi 1.5.0 构建的 Windows 桌面客户端。React / TypeScript 提供界面，Rust 管理 Pi RPC、进程、会话与本地文件，Tauri 2 使用系统 WebView2 显示窗口。
 

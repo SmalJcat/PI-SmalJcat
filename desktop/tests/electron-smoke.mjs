@@ -1,3 +1,4 @@
+import { chooseModel } from './composer-model-ui.mjs';
 import { _electron as electron } from 'playwright';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
@@ -43,11 +44,12 @@ try {
   await page.getByText('这是工具输出。', { exact: false }).waitFor();
   await page.screenshot({ path: path.join(artifacts, 'desktop-chat-test.png') });
   checks.push('中文输入、流式消息、工具详情、安全 Markdown');
-  await page.getByLabel('选择模型', { exact: true }).selectOption('fixture::fixture-fast');
-  await page.waitForFunction(() => document.querySelector('select[aria-label="思考强度"]').value === 'off');
-  await page.getByLabel('选择模型', { exact: true }).selectOption('fixture::fixture-model');
-  await page.getByLabel('思考强度', { exact: true }).selectOption('high');
-  await page.waitForFunction(() => document.querySelector('select[aria-label="思考强度"]').value === 'high');
+  await chooseModel(page, 'fixture::fixture-fast');
+  await page.waitForFunction(async () => (await window.pi.snapshot()).state.thinkingLevel === 'off');
+  const panel = await chooseModel(page, 'fixture::fixture-model');
+  await panel.getByRole('slider', { name: '推理强度', exact: true }).press('End');
+  await page.waitForFunction(async () => (await window.pi.snapshot()).state.thinkingLevel === 'high');
+  await page.keyboard.press('Escape');
   checks.push('模型与思考强度切换');
   await editor.fill('/confirm-test'); await editor.press('Enter');
   await page.getByRole('dialog', { name: '是否继续测试？', exact: true }).waitFor();

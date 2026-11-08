@@ -1,6 +1,6 @@
 {
   "name": "pi-desktop",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "private": true,
   "description": "A local desktop workspace for Pi coding agent",
   "author": "Pi Desktop contributors",

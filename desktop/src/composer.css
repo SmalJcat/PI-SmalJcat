@@ -1,0 +1,55 @@
+/* Two-layer composer with model controls anchored to a body portal. */
+:root { --composer-blue: #367ff5; --composer-access: #e98249; }
+:root .composer-area .composer-context {
+  display: flex; align-items: center; gap: 18px; min-height: 64px;
+  padding: 10px 14px 24px; margin: 0 12px -16px;
+  background: var(--surface, #262626); border: 1px solid var(--border); border-bottom: 0;
+  border-radius: 24px 24px 0 0; color: var(--text); font-size: var(--type-label, 13px);
+}
+:root .composer-context .composer-project { display: inline-flex; align-items: center; gap: 7px; padding: 7px 11px; border-radius: 24px; background: var(--surface-raised); min-width: 0; max-width: 48%; }
+:root .composer-project span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+:root .composer-context .composer-computer { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
+:root .composer-area .composer { border-radius: 28px; padding: 8px 12px 12px; border: 1px solid var(--border); background: var(--surface-raised, #333); box-shadow: none; }
+:root .composer-area .composer textarea { min-height: 84px; padding: 14px 6px 8px; font-size: var(--type-body, 14px); }
+:root .composer-area .composer-toolbar { gap: 12px; padding: 0 0 0 2px; min-height: 40px; }
+:root .composer-area .composer-options { gap: 12px; min-width: 0; }
+:root .composer-area .composer-access { display: inline-flex; align-items: center; gap: 6px; padding: 7px 0; color: var(--composer-access); font-size: var(--type-label, 13px); white-space: nowrap; }
+:root .composer-area .send-controls { gap: 10px; min-width: 0; }
+:root .composer-area .send-button { width: 40px; height: 40px; border-radius: 50%; background: var(--composer-blue); color: #fff; }
+:root .composer-area .send-button:disabled { background: var(--composer-blue); color: #fff; opacity: .45; }
+:root .composer-area .composer-reasoning-trigger { display: flex; align-items: center; gap: 10px; padding: 9px 14px; border-radius: 24px; color: var(--muted); background: var(--surface-elevated-secondary, var(--hover)); font-size: var(--type-label, 13px); white-space: nowrap; }
+:root .composer-area .composer-reasoning-trigger.active { color: var(--text); }
+
+:root .reasoning-popover {
+  position: fixed; z-index: 100; box-sizing: border-box; overflow-y: auto;
+  padding: 18px; border-radius: 24px; border: 1px solid var(--border, #444);
+  background: var(--surface-raised, #faf9f6); color: var(--text, #202020);
+  font-size: var(--type-label, 13px); box-shadow: 0 12px 36px #0003;
+}
+:root .reasoning-heading { display: grid; grid-template-columns: 24px minmax(0, 1fr) 24px; align-items: start; gap: 12px; color: var(--muted); }
+:root .reasoning-heading > div { text-align: center; min-width: 0; }
+:root .reasoning-heading strong { display: flex; align-items: center; justify-content: center; min-height: 26px; color: var(--composer-blue); font-size: 18px; font-weight: 500; }
+:root .reasoning-model { display: inline-flex; align-items: center; justify-content: center; gap: 3px; max-width: 100%; padding: 3px; font-size: 13px; color: var(--text, #202020); overflow-wrap: anywhere; }
+:root .reasoning-reset { display: flex; justify-content: center; padding: 2px; color: var(--muted); }
+:root .reasoning-range { position: relative; margin: 20px 0 0; height: 36px; border-radius: 30px; background: linear-gradient(to right, var(--composer-blue) 0%, var(--composer-blue) var(--reasoning-fill), var(--surface-elevated-secondary, #ccc) var(--reasoning-fill), var(--surface-elevated-secondary, #ccc) 100%); }
+:root .reasoning-range input { appearance: none; position: relative; width: 100%; height: 36px; padding: 0; margin: 0; border: 0; border-radius: 30px; background: transparent; cursor: pointer; }
+:root .reasoning-range input::-webkit-slider-thumb { appearance: none; width: 42px; height: 42px; border: 3px solid var(--composer-blue); border-radius: 50%; background: #fff; }
+:root .reasoning-range input:disabled { cursor: default; opacity: .5; }
+:root .reasoning-dots { position: absolute; inset: 0 18px; display: flex; align-items: center; justify-content: space-between; pointer-events: none; }
+:root .reasoning-dots i { width: 5px; height: 5px; background: #ffffff60; border-radius: 50%; }
+:root .reasoning-model-picker { border-top: 1px solid var(--border); margin-top: 18px; padding-top: 12px; }
+:root .reasoning-search { display: flex; align-items: center; gap: 8px; border: 1px solid var(--border); border-radius: 10px; padding: 8px; }
+:root .reasoning-search input { width: 100%; min-width: 0; background: transparent; border: 0; color: inherit; outline-offset: 4px; font-size: 13px; }
+:root .reasoning-model-list { max-height: 240px; overflow-y: auto; margin-top: 8px; }
+:root .reasoning-model-list button { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; padding: 10px; border-radius: 9px; text-align: left; background: var(--surface-raised, #faf9f6); color: var(--text, #202020); }
+:root .reasoning-model-list button:hover, :root .reasoning-model-list button:focus-visible, :root .reasoning-model-list button[aria-selected=true] { background: var(--hover, #e9e7e0); }
+:root .reasoning-model-list button strong { display: block; font-size: 13px; font-weight: 500; overflow-wrap: anywhere; }
+:root .reasoning-model-list button small { display: block; color: var(--muted, #666); font-size: 11px; margin-top: 3px; }
+:root .reasoning-model-list p { color: var(--muted); font-size: 12px; text-align: center; }
+@media (max-width: 1100px) {
+  :root .composer-area .composer-toolbar { flex-wrap: wrap; gap: 8px; }
+  :root .composer-area .send-controls { margin-left: auto; flex-wrap: wrap; justify-content: flex-end; }
+  :root .composer-area .composer-reasoning-trigger { padding: 8px 10px; font-size: 12px; }
+  :root .composer-area .composer-options { gap: 8px; }
+  :root .composer-area .composer-context { gap: 12px; }
+}

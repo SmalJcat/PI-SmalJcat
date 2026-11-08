@@ -108,3 +108,4 @@ export const RotateCcw = draw(<><path d="M4.5 12a7.5 7.5 0 1112.9 5.2" /><path d
 export const RotateCw = draw(<><path d="M19.5 12a7.5 7.5 0 10-12.9 5.2" /><path d="M19.5 7.5V12H15" /></>);
 // 终端面板与终端同一造型，保留两个名字便于调用方语义化
 export const TerminalSquare = Terminal;
+export const Computer = draw(<><rect x="4" y="4" width="16" height="12" rx="2" /><path d="M2.5 19h19M9 16v3M15 16v3" /></>);
