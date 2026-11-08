@@ -29,6 +29,12 @@ fn send(out: &Output, value: Value) {
 fn reply(out: &Output, id: Value, result: Value) {
     send(out, json!({"jsonrpc":"2.0","id":id,"result":result}));
 }
+fn reject(out: &Output, id: Value, message: &str) {
+    send(
+        out,
+        json!({"jsonrpc":"2.0","id":id,"error":{"code":-32602,"message":message}}),
+    );
+}
 fn update(out: &Output, session: &str, update: Value) {
     send(
         out,
@@ -81,6 +87,10 @@ fn main() {
                 reply(&out, id, init);
             }
             "session/new" => {
+                if std::env::args().any(|argument| argument == "--reject-new") {
+                    reject(&out, id, "fixture rejected session/new");
+                    continue;
+                }
                 let sid = Uuid::new_v4().to_string();
                 let config = options("gemini-fixture", "medium", "default");
                 let mut state = state.lock().unwrap();
@@ -92,6 +102,10 @@ fn main() {
                 reply(&out, id, json!({"sessionId":sid,"configOptions":config}));
             }
             "session/resume" | "session/load" => {
+                if std::env::args().any(|argument| argument == "--reject-resume") {
+                    reject(&out, id, "fixture rejected old session");
+                    continue;
+                }
                 let sid = params["sessionId"].as_str().unwrap_or_default();
                 let mut state = state.lock().unwrap();
                 state.sessions.entry(sid.into()).or_insert_with(
@@ -117,6 +131,19 @@ fn main() {
                 json!({"sessions":state.lock().unwrap().sessions.values().cloned().collect::<Vec<_>>()}),
             ),
             "session/set_config_option" => {
+                if std::env::args().any(|argument| argument == "--exit-on-config") {
+                    std::process::exit(12);
+                }
+                if params["configId"] == "model"
+                    && (std::env::args().any(|argument| argument == "--reject-model")
+                        || std::fs::read_to_string(".acp-fixture-config")
+                            .ok()
+                            .as_deref()
+                            == Some("reject"))
+                {
+                    reject(&out, id, "fixture rejected model configuration");
+                    continue;
+                }
                 let mut state = state.lock().unwrap();
                 let sid = params["sessionId"].as_str().unwrap_or_default();
                 let config = state
@@ -128,7 +155,11 @@ fn main() {
                         .iter_mut()
                         .find(|item| item["id"] == params["configId"])
                     {
-                        option["currentValue"] = params["value"].clone();
+                        if params["configId"] != "model"
+                            || !std::env::args().any(|argument| argument == "--unchanged-model")
+                        {
+                            option["currentValue"] = params["value"].clone();
+                        }
                     }
                 }
                 reply(&out, id, json!({"configOptions":config}));
@@ -152,6 +183,12 @@ fn main() {
                     .unwrap_or_default();
                 if text.contains("[exit]") {
                     std::process::exit(9);
+                }
+                if text.contains("[reject-restore-config]") {
+                    let _ = std::fs::write(".acp-fixture-config", "reject");
+                }
+                if text.contains("[allow-restore-config]") {
+                    let _ = std::fs::write(".acp-fixture-config", "allow");
                 }
                 let session = params["sessionId"].as_str().unwrap_or_default().to_owned();
                 state.lock().unwrap().history.entry(session.clone()).or_default().push(json!({"sessionUpdate":"user_message_chunk","content":{"type":"text","text":text}}));

@@ -20,9 +20,25 @@ use tokio::{
 };
 use uuid::Uuid;
 
-type Reply = oneshot::Sender<std::result::Result<Value, String>>;
+type Reply = oneshot::Sender<std::result::Result<Value, RequestFailure>>;
 const CONTROL_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_CACHE: usize = 16 * 1024 * 1024;
+
+#[derive(Debug)]
+enum RequestFailure {
+    Agent(String),
+    Transport(String),
+    Timeout,
+}
+impl std::fmt::Display for RequestFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Agent(message) | Self::Transport(message) => message,
+            Self::Timeout => "ACP 请求超时，结果未确认",
+        })
+    }
+}
+impl std::error::Error for RequestFailure {}
 
 #[derive(Clone)]
 pub struct LaunchSpec {
@@ -137,12 +153,14 @@ impl Transport {
                     } else if let Some(id) = message["id"].as_u64() {
                         if let Some(waiter) = connection.pending.lock().unwrap().remove(&id) {
                             let result = if message.get("error").is_some() {
-                                Err(message["error"]["message"]
-                                    .as_str()
-                                    .unwrap_or("ACP 请求失败")
-                                    .chars()
-                                    .take(2000)
-                                    .collect())
+                                Err(RequestFailure::Agent(
+                                    message["error"]["message"]
+                                        .as_str()
+                                        .unwrap_or("ACP 请求失败")
+                                        .chars()
+                                        .take(2000)
+                                        .collect(),
+                                ))
                             } else {
                                 Ok(message["result"].clone())
                             };
@@ -184,7 +202,7 @@ impl Transport {
         }
         let _ = self.stop.send(true);
         for (_, waiter) in self.pending.lock().unwrap().drain() {
-            let _ = waiter.send(Err(message.to_owned()));
+            let _ = waiter.send(Err(RequestFailure::Transport(message.to_owned())));
         }
     }
     async fn send(&self, value: Value) -> Result<()> {
@@ -211,9 +229,9 @@ impl Transport {
         self.pending.lock().unwrap().remove(&id);
         match result {
             Ok(Ok(Ok(value))) => Ok(value),
-            Ok(Ok(Err(error))) => bail!("{method}: {error}"),
-            Ok(Err(_)) => bail!("ACP 请求已中断"),
-            Err(_) => bail!("{method} 超时"),
+            Ok(Ok(Err(error))) => Err(anyhow::Error::new(error).context(method.to_owned())),
+            Ok(Err(_)) => Err(RequestFailure::Transport("ACP 请求已中断".into()).into()),
+            Err(_) => Err(anyhow::Error::new(RequestFailure::Timeout).context(method.to_owned())),
         }
     }
     async fn notify(&self, method: &str, params: Value) -> Result<()> {
@@ -264,6 +282,7 @@ struct State {
     busy: bool,
     cancelling: bool,
     error: String,
+    warning: String,
     pid: Option<u32>,
     capabilities: Value,
     agent_info: Value,
@@ -304,7 +323,7 @@ impl Antigravity {
         state.busy || state.connecting
     }
     fn summary(state: &State) -> Value {
-        json!({"revision":state.revision,"connected":state.connected,"connecting":state.connecting,"busy":state.busy,"cancelling":state.cancelling,"capabilities":state.capabilities,"error":state.error,"pid":state.pid,"sessionId":state.conversation.session_id,"cwd":state.conversation.cwd,"configOptions":state.conversation.config_options,"agentInfo":state.agent_info,"permissionMode":state.permission_mode,"permissions":state.permissions.iter().map(|(id,request)|json!({"id":id,"toolCall":request.params["toolCall"],"options":request.params["options"]})).collect::<Vec<_>>()})
+        json!({"revision":state.revision,"connected":state.connected,"connecting":state.connecting,"busy":state.busy,"cancelling":state.cancelling,"capabilities":state.capabilities,"error":state.error,"warning":state.warning,"pid":state.pid,"sessionId":state.conversation.session_id,"cwd":state.conversation.cwd,"configOptions":state.conversation.config_options,"agentInfo":state.agent_info,"permissionMode":state.permission_mode,"permissions":state.permissions.iter().map(|(id,request)|json!({"id":id,"toolCall":request.params["toolCall"],"options":request.params["options"]})).collect::<Vec<_>>()})
     }
     pub fn status(&self) -> Value {
         let state = self.state.lock().unwrap();
@@ -413,7 +432,18 @@ impl Antigravity {
     pub async fn connect(self: &Arc<Self>, cwd: &Path, executable: Option<&str>) -> Result<Value> {
         let _operation = self.operation.lock().await;
         let permission_mode = self.state.lock().unwrap().permission_mode;
-        self.connect_inner(cwd, executable, permission_mode).await
+        self.connect_inner(cwd, executable, permission_mode, true)
+            .await
+    }
+    pub async fn connect_new(
+        self: &Arc<Self>,
+        cwd: &Path,
+        executable: Option<&str>,
+    ) -> Result<Value> {
+        let _operation = self.operation.lock().await;
+        let permission_mode = self.state.lock().unwrap().permission_mode;
+        self.connect_inner(cwd, executable, permission_mode, false)
+            .await
     }
     pub async fn set_permission_mode(self: &Arc<Self>, mode: &str) -> Result<Value> {
         let mode = PermissionMode::parse(mode)?;
@@ -435,7 +465,7 @@ impl Antigravity {
         if connected {
             // ACP has no runtime approval selector. The official flag applies to a
             // process, so reopen the same session with an explicitly selected policy.
-            self.connect_inner(Path::new(&cwd), None, mode).await
+            self.connect_inner(Path::new(&cwd), None, mode, true).await
         } else {
             self.change(|state| {
                 state.permission_mode = mode;
@@ -449,6 +479,7 @@ impl Antigravity {
         cwd: &Path,
         executable: Option<&str>,
         permission_mode: PermissionMode,
+        restore_session: bool,
     ) -> Result<Value> {
         if self.busy() {
             bail!("请先停止当前 Antigravity 任务");
@@ -497,13 +528,15 @@ impl Antigravity {
             let state = self.state.lock().unwrap();
             (state.conversation.clone(), state.permission_mode)
         };
-        let restore = (!previous.session_id.is_empty() && Path::new(&previous.cwd) == cwd)
-            .then(|| previous.clone());
+        let restore =
+            (restore_session && !previous.session_id.is_empty() && Path::new(&previous.cwd) == cwd)
+                .then(|| previous.clone());
         self.shutdown_inner().await;
         self.change(|state| {
             state.epoch += 1;
             state.connecting = true;
             state.error.clear();
+            state.warning.clear();
             state.permission_mode = permission_mode;
             state.conversation = restore.clone().unwrap_or_else(|| Conversation {
                 cwd: cwd.to_string_lossy().into_owned(),
@@ -524,8 +557,8 @@ impl Antigravity {
             Ok::<_, anyhow::Error>(())
         }.await;
         if let Err(error) = result {
-            self.shutdown_inner().await;
             self.change(|state| {
+                state.epoch += 1;
                 state.error = format!("{error:#}");
                 state.conversation = previous;
                 // A failed attempt to restrict access must never make the next
@@ -537,6 +570,7 @@ impl Antigravity {
                 };
                 json!({"reset":true,"messages":state.conversation.messages,"tools":state.conversation.tools})
             });
+            self.shutdown_inner().await;
             return Err(error);
         }
         self.change(|state| {
@@ -612,6 +646,7 @@ impl Antigravity {
         previous: &Conversation,
     ) -> Result<()> {
         let mut options = previous.config_options.clone();
+        let mut rejected = Vec::new();
         options.sort_by_key(|option| option["category"] != "model");
         for option in options {
             let (Some(id), Some(value)) = (option["id"].as_str(), option["currentValue"].as_str())
@@ -631,15 +666,51 @@ impl Antigravity {
                         && has_option(&current["options"], value)
                 });
             if supported {
-                let response = connection
+                let result = connection
                     .request(
                         "session/set_config_option",
                         json!({"sessionId":previous.session_id,"configId":id,"value":value}),
                         CONTROL_TIMEOUT,
                     )
-                    .await?;
-                self.apply_config_response(id, value, &response);
+                    .await;
+                match result {
+                    Ok(response) => self.apply_config_response(id, value, &response),
+                    Err(error)
+                        if matches!(
+                            error.downcast_ref::<RequestFailure>(),
+                            Some(RequestFailure::Agent(_))
+                        ) => {}
+                    Err(error) => {
+                        connection.fail("配置恢复未确认，已断开 Antigravity");
+                        return Err(error);
+                    }
+                }
+                let restored = self
+                    .state
+                    .lock()
+                    .unwrap()
+                    .conversation
+                    .config_options
+                    .iter()
+                    .any(|current| current["id"] == id && current["currentValue"] == value);
+                if !restored {
+                    rejected.push(
+                        match option["category"].as_str().unwrap_or(id) {
+                            "model" => "模型",
+                            "thought_level" => "推理档位",
+                            "mode" => "模式",
+                            _ => id,
+                        }
+                        .to_owned(),
+                    );
+                }
             }
+        }
+        if !rejected.is_empty() {
+            self.change(|state| {
+                state.warning = format!("未恢复{}，已保留 CLI 当前配置", rejected.join("、"));
+                json!({})
+            });
         }
         Ok(())
     }
@@ -654,10 +725,14 @@ impl Antigravity {
         self.change(|state| {
             state.connecting = true;
             state.error.clear();
+            state.warning.clear();
             json!({})
         });
         let result = self.setup_session(&connection, id, None).await;
         self.change(|state| { state.connecting = false; if result.is_err() { state.conversation = previous; } json!({"reset":true,"messages":state.conversation.messages,"tools":state.conversation.tools}) });
+        if result.is_err() && connection.closed.load(Ordering::SeqCst) {
+            self.shutdown_inner().await;
+        }
         result?;
         Ok(self.status())
     }
@@ -696,6 +771,10 @@ impl Antigravity {
             )
             .await?;
         self.apply_config_response(id, value, &response);
+        self.change(|state| {
+            state.warning.clear();
+            json!({})
+        });
         self.save().await;
         Ok(self.status())
     }
@@ -1141,6 +1220,34 @@ fn proxy_address(value: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn request_timeout_is_distinct_from_an_agent_rejection() {
+        let (writer, _reader) = mpsc::channel(2);
+        let (stop, _) = watch::channel(false);
+        let (_, exited) = watch::channel(false);
+        let transport = Transport {
+            writer,
+            pending: Mutex::new(HashMap::new()),
+            next: AtomicU64::new(1),
+            closed: AtomicBool::new(false),
+            stop,
+            exited,
+            pid: 0,
+        };
+        let error = transport
+            .request(
+                "session/set_config_option",
+                json!({}),
+                Duration::from_millis(20),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error.downcast_ref::<RequestFailure>(),
+            Some(RequestFailure::Timeout)
+        ));
+        assert!(transport.pending.lock().unwrap().is_empty());
+    }
     #[test]
     fn proxy_formats_and_permission_values() {
         assert_eq!(

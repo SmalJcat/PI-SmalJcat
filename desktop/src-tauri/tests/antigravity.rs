@@ -3,11 +3,14 @@ use serde_json::{json, Value};
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
 fn fixture(root: &std::path::Path) -> Arc<Antigravity> {
+    fixture_with(root, &[])
+}
+fn fixture_with(root: &std::path::Path, args: &[&str]) -> Arc<Antigravity> {
     Antigravity::with_launcher(
         root.join("desktop-data"),
         Some(LaunchSpec {
             executable: PathBuf::from(env!("CARGO_BIN_EXE_acp-fixture")),
-            args: vec![],
+            args: args.iter().map(|value| (*value).to_owned()).collect(),
         }),
     )
 }
@@ -23,6 +26,107 @@ async fn until(manager: &Antigravity, predicate: impl Fn(&Value) -> bool) -> Val
     })
     .await
     .expect("ACP fixture did not settle")
+}
+#[tokio::test]
+async fn rejected_configuration_keeps_connection_and_confirmed_values() {
+    for flag in ["--reject-model", "--unchanged-model"] {
+        let root = tempfile::tempdir().unwrap();
+        let seed = fixture(root.path());
+        let old = seed.connect(root.path(), None).await.unwrap();
+        seed.configure("model", "claude-fixture").await.unwrap();
+        seed.configure("thought_level", "high").await.unwrap();
+        seed.prompt("old history survives rejected configuration", &[])
+            .await
+            .unwrap();
+        let before = until(&seed, |state| state["busy"] == false).await;
+        seed.shutdown().await;
+        let manager = fixture_with(root.path(), &[flag]);
+        manager.connect(root.path(), None).await.unwrap();
+        let recovered = manager
+            .session(Some(old["sessionId"].as_str().unwrap()))
+            .await
+            .unwrap();
+        assert_eq!(recovered["connected"], true);
+        assert_eq!(recovered["error"], "");
+        assert!(recovered["warning"]
+            .as_str()
+            .unwrap()
+            .contains("未恢复模型"));
+        assert_eq!(
+            recovered["configOptions"][0]["currentValue"],
+            "gemini-fixture"
+        );
+        assert_eq!(
+            recovered["configOptions"][1]["currentValue"], "high",
+            "Other configurations are still restored"
+        );
+        assert_eq!(recovered["messages"], before["messages"]);
+        manager.shutdown().await;
+        let reconnected = manager.connect(root.path(), None).await.unwrap();
+        assert_eq!(reconnected["sessionId"], old["sessionId"]);
+        assert_eq!(reconnected["connected"], true);
+        manager.shutdown().await;
+    }
+}
+#[tokio::test]
+async fn configuration_transport_failure_is_not_a_successful_connection() {
+    let root = tempfile::tempdir().unwrap();
+    let seed = fixture(root.path());
+    let old = seed.connect(root.path(), None).await.unwrap();
+    seed.configure("model", "claude-fixture").await.unwrap();
+    seed.shutdown().await;
+    let manager = fixture_with(root.path(), &["--exit-on-config"]);
+    manager.connect(root.path(), None).await.unwrap();
+    assert!(manager
+        .session(Some(old["sessionId"].as_str().unwrap()))
+        .await
+        .is_err());
+    let failed = manager.status();
+    assert_eq!(failed["connected"], false);
+    assert_eq!(failed["connecting"], false);
+    assert!(failed["pid"].is_null());
+    let cached: Value = serde_json::from_slice(
+        &std::fs::read(
+            root.path()
+                .join("desktop-data/history")
+                .join(format!("{}.json", old["sessionId"].as_str().unwrap())),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(cached["configOptions"][0]["currentValue"], "claude-fixture");
+    let fresh = manager.connect_new(root.path(), None).await.unwrap();
+    assert_eq!(fresh["connected"], true);
+    manager.shutdown().await;
+    let rejected = fixture_with(root.path(), &["--reject-new"]);
+    assert!(rejected.connect_new(root.path(), None).await.is_err());
+    assert_eq!(rejected.status()["connected"], false);
+    assert!(rejected.status()["pid"].is_null());
+    rejected.shutdown().await;
+}
+#[tokio::test]
+async fn explicit_new_connection_bypasses_invalid_history_without_overwriting_it() {
+    let root = tempfile::tempdir().unwrap();
+    let manager = fixture_with(root.path(), &["--reject-resume"]);
+    let old = manager.connect(root.path(), None).await.unwrap();
+    manager.prompt("preserved old history", &[]).await.unwrap();
+    let before = until(&manager, |state| state["busy"] == false).await;
+    manager.shutdown().await;
+    assert!(manager.connect(root.path(), None).await.is_err());
+    assert_eq!(manager.status()["sessionId"], old["sessionId"]);
+    assert_eq!(manager.status()["messages"], before["messages"]);
+    let fresh = manager.connect_new(root.path(), None).await.unwrap();
+    assert_ne!(fresh["sessionId"], old["sessionId"]);
+    assert!(fresh["messages"].as_array().unwrap().is_empty());
+    manager.shutdown().await;
+    let healthy = fixture(root.path());
+    healthy.connect(root.path(), None).await.unwrap();
+    healthy
+        .session(Some(old["sessionId"].as_str().unwrap()))
+        .await
+        .unwrap();
+    assert_eq!(healthy.status()["messages"], before["messages"]);
+    healthy.shutdown().await;
 }
 #[tokio::test]
 async fn handshake_stream_config_cache_resume_and_shutdown() {

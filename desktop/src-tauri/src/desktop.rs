@@ -172,6 +172,16 @@ async fn dispatch(
                         )
                         .await
                 }
+                "connect-new" => {
+                    antigravity
+                        .connect_new(
+                            &PathBuf::from(payload["cwd"].as_str().context("缺少工作区")?),
+                            payload["executable"]
+                                .as_str()
+                                .filter(|path| !path.is_empty()),
+                        )
+                        .await
+                }
                 "new" => antigravity.session(None).await,
                 "load" => {
                     antigravity
