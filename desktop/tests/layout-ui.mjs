@@ -15,7 +15,7 @@ export async function layoutChecks(page, artifacts, checks) {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.locator('.welcome').waitFor();
   const before = await geometry();
-  assert.equal(before.length, 3);
+  assert.equal(before.length, 4);
   assert.ok(before.every((rect, index) => rect.height >= 32 && rect.x === before[0].x && (index === 0 || rect.y >= before[index - 1].y + before[index - 1].height)), 'Cold navigation is a stable vertical list');
   const welcome = await page.locator('.welcome').boundingBox(), composer = await page.locator('.composer-context').boundingBox();
   assert.ok(composer.y >= welcome.y + welcome.height - 1 && composer.y - welcome.y - welcome.height < 48, 'Welcome and composer stay adjacent');

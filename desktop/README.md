@@ -1,8 +1,14 @@
-# Pi Desktop 0.5.3 · Rust + Tauri
+# Pi Desktop 0.6.0 · Rust + Tauri
 
 为 Pi 1.5.0 构建的 Windows 桌面客户端。React / TypeScript 提供界面，Rust 管理 Pi RPC、进程、会话与本地文件，Tauri 2 使用系统 WebView2 显示窗口。
 
 生产版不再使用 Electron 或 Node.js。Pi 的模型、MCP、工具和扩展继续通过现有 `pi.exe` 运行。
+
+## 0.6.0 Antigravity CLI
+
+左侧选择 **Antigravity** → **连接已有登录**。客户端调用本机官方 `agy acp`，复用 CLI 已缓存的登录；在模型/推理面板选择 CLI 实际返回的模型。支持流式回复、图片与文本附件、停止、工具权限确认、新建和恢复历史；切回 Pi 保留双方会话和文本草稿。首次登录仍在官方 CLI 中完成。
+
+CLI 默认位置为 `%LOCALAPPDATA%\agy\bin\agy.exe`，其它位置可在“连接设置”中选择。启动读取 Windows HTTP/HTTPS 系统代理，界面不接触 OAuth 令牌。Pi 的上下文/子代理/MCP 面板继续管理 Pi；Antigravity 使用自己的工具、配置和会话。具体边界见 [ACP 接入说明](docs/ANTIGRAVITY-ACP.md)。
 
 ## 0.5.0 当前状态
 

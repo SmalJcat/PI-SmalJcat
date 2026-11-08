@@ -1,6 +1,6 @@
 [package]
 name = "pi-desktop"
-version = "0.5.3"
+version = "0.6.0"
 description = "Native desktop workspace for Pi"
 authors = ["Pi Desktop contributors"]
 license = "MIT"
@@ -71,3 +71,7 @@ strip = true
 name = "pi-session-lease"
 path = "src/bin/pi-session-lease.rs"
 required-features = ["test-fixture"]
+
+[[bin]]
+name = "acp-fixture"
+path = "src/bin/acp-fixture.rs"

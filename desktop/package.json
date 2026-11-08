@@ -1,6 +1,6 @@
 {
   "name": "pi-desktop",
-  "version": "0.5.3",
+  "version": "0.6.0",
   "private": true,
   "description": "A local desktop workspace for Pi coding agent",
   "author": "Pi Desktop contributors",
@@ -20,7 +20,7 @@
     "test:context": "node scripts/native.mjs cargo run --manifest-path src-tauri/Cargo.toml --no-default-features --bin pi-workspace-check",
     "test:agent:contract": "node tests/agent-contract.mjs",
     "package": "node scripts/package-native.mjs",
-    "build:test": "npm run build && node scripts/native.mjs cargo build --manifest-path src-tauri/Cargo.toml --locked --no-default-features --features test-fixture --bin pi-session-lease && node scripts/native.mjs build --debug --no-bundle --features test-fixture",
+    "build:test": "npm run build && node scripts/native.mjs cargo build --manifest-path src-tauri/Cargo.toml --locked --no-default-features --features test-fixture --bin pi-session-lease --bin acp-fixture && node scripts/native.mjs build --debug --no-bundle --features test-fixture",
     "legacy:dev": "node scripts/dev.mjs",
     "legacy:start": "electron .",
     "legacy:test:ui": "node tests/electron-smoke.mjs",

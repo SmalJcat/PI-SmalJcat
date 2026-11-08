@@ -58,10 +58,10 @@ impl JsonLines {
 // Closing the job also terminates grandchildren (MCP workers, shell tools) if the
 // desktop process crashes. No system-wide process-name matching is used.
 #[cfg(windows)]
-struct ProcessJob(isize);
+pub(crate) struct ProcessJob(isize);
 #[cfg(windows)]
 impl ProcessJob {
-    fn attach(child: &tokio::process::Child) -> Result<Self> {
+    pub(crate) fn attach(child: &tokio::process::Child) -> Result<Self> {
         use std::mem::{size_of, zeroed};
         use windows_sys::Win32::{Foundation::CloseHandle, System::JobObjects::*};
         unsafe {

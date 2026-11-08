@@ -47,6 +47,8 @@ export interface ExtensionScan {
   extensions: ExtensionEntry[];
 }
 export interface PiApi {
+  antigravity(options?: Wire): Promise<Wire>;
+  onAntigravity(callback: (state: Wire) => void): () => void;
   bootstrap(): Promise<{ preferences: Preferences; agentDir: string; version: string; recovery?: {sessionPath: string; cwd: string; interrupted: boolean} | null }>;
   connect(options: { cwd?: string; sessionPath?: string; trust?: boolean; fork?: boolean }): Promise<Snapshot>;
   sessionAccess(path: string): Promise<{available: boolean; reason: string; canFork: boolean}>;

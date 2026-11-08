@@ -8,12 +8,15 @@ export async function initializeBridge() {
     if (!window.pi) throw new Error('请从 Pi Desktop 应用中打开此界面。');
     return;
   }
-  type Envelope = { generation: number; event: Wire };
+  type Envelope = { generation: number; event: Wire; engine?: string };
   const subscribers = new Set<(event: Envelope) => void>();
+  const acpSubscribers = new Set<(event: Wire) => void>();
   const events = new Channel<Envelope>();
-  events.onmessage = payload => { for (const listener of subscribers) listener(payload); };
+  events.onmessage = payload => { if (payload.engine === 'antigravity') { for (const listener of acpSubscribers) listener(payload.event); } else { for (const listener of subscribers) listener(payload); } };
   const call = <T,>(operation: string, payload: Wire = {}) => invoke<T>('pi_command', { operation, payload });
   const api: PiApi = {
+    antigravity: (options = {}) => call('antigravity', options),
+    onAntigravity: callback => { acpSubscribers.add(callback); return () => { acpSubscribers.delete(callback); }; },
     bootstrap: () => call('bootstrap'),
     connect: options => call('connect', options),
     snapshot: () => call('snapshot'),

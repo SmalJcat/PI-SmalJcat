@@ -1,3 +1,4 @@
+:root .app-shell .backend-hidden { display: none; }
 /* Persistent shell styles belong to the initial bundle, never a lazy panel. */
 /* Native WebView2 popups do not reliably inherit a transparent select background. */
 :root select option,

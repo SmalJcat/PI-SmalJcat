@@ -1,8 +1,10 @@
 # PI-SmalJcat · Pi Desktop
 
-基于 Pi 1.5.0 的 Windows 桌面客户端，当前版本 **0.5.3**。React / TypeScript 提供界面，Rust + Tauri 2 管理 Pi RPC、进程和本地工作区。
+基于 Pi 1.5.0 的 Windows 桌面客户端，当前版本 **0.6.0**。React / TypeScript 提供界面，Rust + Tauri 2 管理 Pi RPC、进程和本地工作区。
 
 主要功能包括流式对话、会话保护与恢复、正文全文检索、文件引用与 Git 差异审阅、自动压缩管理、多角色子代理与隔离工作树、命令运行器，以及托盘、快捷键和本地诊断。桌面 MCP 客户端可以连接服务器并调用工具；扩展面板目前只做签名检查，MCP Apps 目前是沙箱演示。
+
+新增 [Antigravity CLI 后端](desktop/docs/ANTIGRAVITY-ACP.md)：通过官方 ACP 复用已有登录，在桌面里进行独立会话、模型选择、流式对话和工具权限确认。
 
 最新完成情况与后续工作以[开发记录](desktop/docs/DEVELOPMENT.md)为准。各阶段文档保留当时的验收与限制，不能单独代表当前状态。
 

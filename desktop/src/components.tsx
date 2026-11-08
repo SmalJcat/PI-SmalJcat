@@ -36,9 +36,9 @@ function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
   return <button className="copy-button" title="复制" onClick={() => { void navigator.clipboard.writeText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1600); }); }}>{copied ? <Check size={14} /> : <Copy size={14} />}{copied ? '已复制' : '复制'}</button>;
 }
-export function RichText({ text }: { text: string }) {
+export function RichText({ text, allowFileLinks = true }: { text: string; allowFileLinks?: boolean }) {
   return <div className="markdown"><Markdown remarkPlugins={[remarkGfm]} skipHtml components={{
-    a: ({ href, children }) => <a href={href} onClick={e => { e.preventDefault(); if (href && /^https?:\/\//.test(href)) void window.pi.openLink(href); else { const local=parseLocalLink(href); if(local) window.dispatchEvent(new CustomEvent('pi:open-file',{detail:local})); } }} title={href}>{children}</a>,
+    a: ({ href, children }) => !allowFileLinks && href && !/^https?:\/\//.test(href) ? <code title={href}>{children}</code> : <a href={href} onClick={e => { e.preventDefault(); if (href && /^https?:\/\//.test(href)) void window.pi.openLink(href); else { const local=parseLocalLink(href); if(local) window.dispatchEvent(new CustomEvent('pi:open-file',{detail:local})); } }} title={href}>{children}</a>,
     img: ({ alt }) => <span className="image-placeholder">[图片链接：{alt || '图片'}]</span>,
     pre: ({ children }) => { const child=Array.isArray(children)?children[0]:children; const props=isValidElement<{children?:ReactNode;className?:string}>(child)?child.props:{}; return <CodeBlock text={String(props.children||'')} language={props.className?.replace('language-','')}/>; },
   }}>{text}</Markdown></div>;
@@ -53,7 +53,7 @@ export function ToolCard({ call, tool }: { call: Wire; tool?: Wire }) {
   const done = tool?.status === 'done', error = tool?.status === 'error';
   return <details className={`tool-card ${error ? 'tool-error' : ''}`} ref={card}><summary><span className="tool-icon">{error ? <CircleAlert size={15} /> : done ? <CheckCheck size={15} /> : tool?.status === 'running' ? <LoaderCircle size={15} className="spin" /> : <Terminal size={15} />}</span><span className="tool-name">{call.name || tool?.name}</span><span className="tool-target">{String(target).slice(0, 100)}</span><span className="tool-duration">{tool?.durationMs !== undefined ? `${(tool.durationMs / 1000).toFixed(1)}s` : ''}</span><ChevronRight className="disclosure" size={14} /></summary><div className="tool-body"><label>参数</label><pre>{JSON.stringify(args, null, 2)}</pre>{output && <><label>输出</label><pre>{output.slice(0, 40000)}{output.length > 40000 ? '\n…界面截取前 40,000 字符，完整结果已保存在会话中。' : ''}</pre></>}{!output && <p className="muted">{tool?.status === 'running' ? '正在执行…' : done ? '执行完成' : '等待执行结果'}</p>}</div></details>;
 }
-export function Message({ message, tools }: { message: Wire; tools: Record<string, Wire> }) {
+export function Message({ message, tools, agentName = 'Pi', allowFileLinks = true }: { message: Wire; tools: Record<string, Wire>; agentName?: string; allowFileLinks?: boolean }) {
   if (message.role === 'system' || message.role === 'toolResult' || message.display === false) return null;
   const user = message.role === 'user';
   if (message.role === 'compactionSummary' || message.role === 'branchSummary') return <details className="context-summary"><summary><Brain size={14} />{message.role === 'compactionSummary' ? '上下文已压缩 · 查看摘要' : '分支摘要'}</summary><RichText text={message.summary || ''} /></details>;
@@ -61,10 +61,10 @@ export function Message({ message, tools }: { message: Wire; tools: Record<strin
   const blocks: Wire[] = typeof message.content === 'string' ? [{ type: 'text', text: message.content }] : message.content || [];
   if (!blocks.length && !message.errorMessage) return null;
   return <article className={`message ${user ? 'user' : 'assistant'}`}>
-    {!user && <div className="message-heading"><PiMark small /><span>{message.role === 'assistant' ? 'Pi' : message.customType || message.role}</span>{message.model && <span className="message-model">{message.model}</span>}</div>}
+    {!user && <div className="message-heading"><PiMark small /><span>{message.role === 'assistant' ? agentName : message.customType || message.role}</span>{message.model && <span className="message-model">{message.model}</span>}</div>}
     <div className="message-content">{blocks.map((block, index) => {
       if (!block) return null;
-      if (block.type === 'text') return user ? <div className="user-text" key={index}>{block.text}</div> : <RichText key={index} text={block.text} />;
+      if (block.type === 'text') return user ? <div className="user-text" key={index}>{block.text}</div> : <RichText key={index} text={block.text} allowFileLinks={allowFileLinks} />;
       if (block.type === 'thinking' && block.thinking) return <details className="thinking" key={index}><summary><Brain size={14} />思考过程<ChevronRight size={13} className="disclosure" /></summary><div>{block.thinking}</div></details>;
       if (block.type === 'toolCall') return <ToolCard key={block.id || index} call={block} tool={tools[block.id]} />;
       if (block.type === 'image' && /^image\/(png|jpeg|gif|webp)$/.test(block.mimeType)) return <img className="message-image" key={index} src={`data:${block.mimeType};base64,${block.data}`} alt="会话附件" />;

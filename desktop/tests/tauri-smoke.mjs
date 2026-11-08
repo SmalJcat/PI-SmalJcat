@@ -1,3 +1,4 @@
+import { antigravityChecks } from './antigravity-ui.mjs';
 import { composerModelChecks } from './composer-model-ui.mjs';
 import { overflowChecks } from './overflow-ui.mjs';
 import { layoutChecks } from './layout-ui.mjs';
@@ -473,10 +474,16 @@ try {
     assert.equal(typeof interrupted.sessionPath, 'string');
     for (let attempt = 0; ; attempt++) { try { await readFile(interrupted.sessionPath); break; } catch (error) { if (attempt >= 30) throw error; await delay(50); } }
     console.log(JSON.stringify({ crashRecoveryInput: { id: interrupted.id, status: interrupted.status, sessionPath: interrupted.sessionPath } }));
+    const crashAcp = await page.evaluate(async () => {
+      const snapshot = await window.pi.snapshot();
+      await window.pi.antigravity({ action: 'connect', cwd: snapshot.cwd });
+      await window.pi.antigravity({ action: 'prompt', text: '[wait]' });
+      return window.pi.antigravity({ action: 'status' });
+    });
     const beforeCrash = await page.evaluate(() => window.pi.diagnostics());
     const crashExit = once(child, 'exit');
-    const killer = spawn('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true }); await once(killer, 'exit'); await crashExit;
-    await Promise.all([beforeCrash.pid, ...(beforeCrash.agentPids || [])].map(pid => waitForProcessExit(pid)));
+    const killer = spawn('taskkill.exe', ['/PID', String(child.pid), '/F'], { stdio: 'ignore', windowsHide: true }); await once(killer, 'exit'); await crashExit;
+    await Promise.all([beforeCrash.pid, crashAcp.pid, ...(beforeCrash.agentPids || [])].map(pid => waitForProcessExit(pid)));
     await browser.close().catch(() => {}); browser = null; page = null; stderr = '';
     child = spawn(executable, [], { cwd: root, env, windowsHide: false, stdio: ['ignore', 'pipe', 'pipe'] });
     child.stderr.on('data', bytes => { stderr = (stderr + bytes.toString()).slice(-10000); }); child.stdout.on('data', () => {});
@@ -492,9 +499,10 @@ try {
     await page.screenshot({ path: path.join(artifacts, 'v04-agents-recovered.png') });
     await writeFile(path.join(artifacts, 'v04-task-records.json'), JSON.stringify(await page.evaluate(() => window.pi.agentTasks()), null, 2) + '\n');
     await page.keyboard.press('Escape');
-    checks.push('应用崩溃清理子进程、重启保留任务记录并继续子会话');
+    checks.push('应用崩溃后 Job 清理 Pi/ACP 子进程、重启恢复探子子会话');
     await scoutHistoryChecks(page, artifacts, checks, waitForValue);
     await overflowChecks(page, artifacts, checks);
+    await antigravityChecks(page, artifacts, checks, waitForValue, waitForProcessExit);
     const rejected = await page.evaluate(async () => {
       try { await window.pi.command('bash', { command: 'echo forbidden' }); return false; } catch { return true; }
     });

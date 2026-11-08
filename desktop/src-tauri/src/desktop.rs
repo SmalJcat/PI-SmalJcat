@@ -55,6 +55,7 @@ pub struct Services {
     pub terminal: Arc<Terminal>,
     pub index: Arc<IndexStore>,
     pub session_index: Arc<crate::session_index::SessionIndex>,
+    pub antigravity: Arc<crate::antigravity::Antigravity>,
 }
 
 /// 系统集成开关：关闭到托盘与"真的退出"标记。
@@ -97,6 +98,10 @@ fn pi_subscribe(
     window
         .state::<crate::trace::StartupTrace>()
         .mark("命令通道");
+    let acp_events = events.clone();
+    state.services.antigravity.subscribe(Arc::new(move |event| {
+        let _ = acp_events.send(json!({"engine":"antigravity","generation":0,"event":event}));
+    }));
     state.services.core.subscribe(Arc::new(move |value| {
         let _ = events.send(value);
     }));
@@ -136,9 +141,76 @@ async fn dispatch(
         terminal,
         index,
         session_index,
+        antigravity,
     } = services;
     let app = window.app_handle().clone();
     match operation {
+        "antigravity" => {
+            let action = payload["action"].as_str().unwrap_or("status");
+            match action {
+                "status" => Ok(antigravity.status()),
+                "choose-executable" => {
+                    let selected = tokio::task::spawn_blocking(move || {
+                        app.dialog()
+                            .file()
+                            .set_title("选择 agy.exe")
+                            .add_filter("Antigravity CLI", &["exe"])
+                            .blocking_pick_file()
+                    })
+                    .await?;
+                    Ok(selected
+                        .map(|file| json!(file.to_string()))
+                        .unwrap_or(Value::Null))
+                }
+                "connect" => {
+                    antigravity
+                        .connect(
+                            &PathBuf::from(payload["cwd"].as_str().context("缺少工作区")?),
+                            payload["executable"]
+                                .as_str()
+                                .filter(|path| !path.is_empty()),
+                        )
+                        .await
+                }
+                "new" => antigravity.session(None).await,
+                "load" => {
+                    antigravity
+                        .session(Some(payload["sessionId"].as_str().context("缺少会话 ID")?))
+                        .await
+                }
+                "list" => antigravity.list().await,
+                "configure" => {
+                    antigravity
+                        .configure(
+                            payload["configId"].as_str().context("缺少配置项")?,
+                            payload["value"].as_str().context("缺少配置值")?,
+                        )
+                        .await
+                }
+                "prompt" => {
+                    let images: Vec<Value> = serde_json::from_value(
+                        payload.get("images").cloned().unwrap_or_else(|| json!([])),
+                    )?;
+                    antigravity
+                        .prompt(payload["text"].as_str().unwrap_or_default(), &images)
+                        .await
+                }
+                "permission" => {
+                    antigravity
+                        .permission(
+                            payload["id"].as_str().context("缺少权限请求")?,
+                            payload["optionId"].as_str(),
+                        )
+                        .await
+                }
+                "cancel" => antigravity.cancel().await,
+                "disconnect" => {
+                    antigravity.shutdown().await;
+                    Ok(antigravity.status())
+                }
+                _ => bail!("不支持的 Antigravity 操作"),
+            }
+        }
         "bootstrap" => Ok(core.bootstrap().await),
         "connect" => {
             core.connect(serde_json::from_value::<ConnectOptions>(payload)?)
@@ -938,6 +1010,7 @@ pub fn run() {
                     session_index: Arc::new(crate::session_index::SessionIndex::open(
                         &data_dir.join("sessions.sqlite"),
                     )?),
+                    antigravity: crate::antigravity::Antigravity::new(data_dir.join("antigravity")),
                 },
                 close_prompt: AtomicBool::new(false),
             });
@@ -1087,27 +1160,32 @@ pub fn run() {
                 }
                 let app = window.app_handle().clone();
                 let core = state.services.core.clone();
+                let antigravity = state.services.antigravity.clone();
                 tauri::async_runtime::spawn(async move {
-                    let proceed =
-                        if core.busy().await || core.operation_pending() || core.agents.busy() {
-                            let dialog_app = app.clone();
-                            tokio::task::spawn_blocking(move || {
-                                dialog_app
-                                    .dialog()
-                                    .message("任务仍在运行，停止并关闭 Pi Desktop？")
-                                    .title("关闭 Pi Desktop")
-                                    .buttons(MessageDialogButtons::OkCancelCustom(
-                                        "停止并关闭".into(),
-                                        "继续运行".into(),
-                                    ))
-                                    .blocking_show()
-                            })
-                            .await
-                            .unwrap_or(false)
-                        } else {
-                            true
-                        };
+                    let proceed = if core.busy().await
+                        || core.operation_pending()
+                        || core.agents.busy()
+                        || antigravity.busy()
+                    {
+                        let dialog_app = app.clone();
+                        tokio::task::spawn_blocking(move || {
+                            dialog_app
+                                .dialog()
+                                .message("任务仍在运行，停止并关闭 Pi Desktop？")
+                                .title("关闭 Pi Desktop")
+                                .buttons(MessageDialogButtons::OkCancelCustom(
+                                    "停止并关闭".into(),
+                                    "继续运行".into(),
+                                ))
+                                .blocking_show()
+                        })
+                        .await
+                        .unwrap_or(false)
+                    } else {
+                        true
+                    };
                     if proceed {
+                        antigravity.shutdown().await;
                         core.shutdown().await;
                         let _ = app.state::<DesktopState>().services.mcp.shutdown().await;
                         // 正常退出标记：下次启动据此区分"异常退出"（有更新的 panic 报告才算）
