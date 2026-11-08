@@ -98,6 +98,15 @@ const handle = command => {
       return respond(command, { cost: usages.reduce((sum, usage) => sum + (usage.cost?.total || 0), 0), tokens: { input: total('input'), output: total('output'), cacheRead: total('cacheRead'), cacheWrite: total('cacheWrite'), total: total('totalTokens') }, contextUsage: { tokens: contextTokens, contextWindow: model.contextWindow, percent: contextTokens / model.contextWindow * 100 } });
     }
     case 'prompt': {
+      if (command.message === '/overflow-test') {
+        const url = 'https://example.invalid/' + 'long-unbroken-path-'.repeat(36);
+        const detail = 'OpenAI API error (524): ' + JSON.stringify({ type: url, detail: 'timeout', token: '界'.repeat(128) });
+        completeMessage(message('user', '检查长错误输出'));
+        completeMessage(message('assistant', [{ type: 'text', text: `长链接：${url}\n\n\`\`\`text\n${url}\n\`\`\`` }], { model: model.id, errorMessage: detail, stopReason: 'error' }));
+        emit({ type: 'extension_ui_request', id: randomUUID(), method: 'notify', notifyType: 'error', message: detail });
+        emit({ type: 'agent_settled', aborted: false });
+        return respond(command, { disposition: 'handled' });
+      }
       if (command.message.startsWith('/desktop-context ')) {
         const [, operation, nonce] = command.message.split(' ');
         emit({ type: 'extension_ui_request', method: 'notify', id: randomUUID(), notifyType: 'info', message: `PI_DESKTOP_CONTEXT:${nonce}:${JSON.stringify(settings())}` });

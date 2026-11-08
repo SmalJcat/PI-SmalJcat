@@ -1,4 +1,28 @@
 /* Persistent shell styles belong to the initial bundle, never a lazy panel. */
+/* Native WebView2 popups do not reliably inherit a transparent select background. */
+:root select option,
+:root select optgroup {
+  color: var(--text, #202020);
+  background-color: var(--surface, #faf9f6);
+}
+:root .composer .model-select select,
+:root .composer .thinking-select select {
+  color: var(--text, #202020);
+  background-color: var(--surface-raised, #ffffff);
+  font-size: var(--type-meta, 12px);
+}
+:root .composer .model-select select { max-width: min(280px, 32vw); }
+
+/* Keep long URLs, JSON errors and tool output inside their own containers. */
+:root .transcript .message.assistant .message-content,
+:root .transcript .markdown,
+:root .transcript .tool-card { min-width: 0; max-width: 100%; }
+:root .inline-error { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+:root .inline-error > span,
+:root .notice > div { flex: 1; min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+:root .inline-error > svg { flex-shrink: 0; }
+:root .tool-body pre { max-width: 100%; white-space: pre-wrap; overflow-wrap: anywhere; }
+
 :root .sidebar .workspace-tools {
   display: flex; flex-direction: column; flex-shrink: 0; gap: 2px;
   padding: 8px 4px; border-top: 1px solid var(--border);

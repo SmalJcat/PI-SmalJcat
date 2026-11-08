@@ -1,3 +1,4 @@
+import { overflowChecks } from './overflow-ui.mjs';
 import { layoutChecks } from './layout-ui.mjs';
 import { scoutHistoryChecks } from './scout-history-checks.mjs';
 import { chromium } from 'playwright';
@@ -496,6 +497,7 @@ try {
     await page.keyboard.press('Escape');
     checks.push('应用崩溃清理子进程、重启保留任务记录并继续子会话');
     await scoutHistoryChecks(page, artifacts, checks, waitForValue);
+    await overflowChecks(page, artifacts, checks);
     const rejected = await page.evaluate(async () => {
       try { await window.pi.command('bash', { command: 'echo forbidden' }); return false; } catch { return true; }
     });
