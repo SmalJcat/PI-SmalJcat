@@ -191,7 +191,14 @@ async fn dispatch(
                 "list" => antigravity.list().await,
                 "set-permission-mode" => {
                     antigravity
-                        .set_permission_mode(payload["mode"].as_str().context("缺少权限模式")?)
+                        .set_permission_policy(
+                            payload["mode"].as_str().context("缺少权限模式")?,
+                            payload
+                                .get("rules")
+                                .cloned()
+                                .map(serde_json::from_value)
+                                .transpose()?,
+                        )
                         .await
                 }
                 "configure" => {
@@ -240,6 +247,8 @@ async fn dispatch(
                 .await
         }
         "context-status" => core.context_status().await,
+        "context-usage" => core.context_usage().await,
+        "permissions" => core.permission_action(payload).await,
         "context-settings" => core.configure_context(payload).await,
         "agent-tasks" => core.agent_action(payload).await,
         // 子代理角色目录（路线图 P3.2）：界面用它渲染角色选择。

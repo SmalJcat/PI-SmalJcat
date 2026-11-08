@@ -1,3 +1,4 @@
+import desktopPermissions from '../extensions/desktop-permissions.mjs';
 // Deterministic Pi protocol fixture. Never makes a model or network request.
 import { JsonLines } from '../electron/rpc.mjs';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -80,6 +81,22 @@ function askScout(action, payload = {}) {
   const id = randomUUID(); scoutControl.requestId = id;
   emit({ type: 'extension_ui_request', method: 'input', id, title: 'PI_DESKTOP_AGENT_RPC', placeholder: JSON.stringify({ token: process.env.PI_DESKTOP_BRIDGE_TOKEN, action, ...payload }) });
 }
+let permissionHook, permissionWait;
+desktopPermissions({ registerCommand(){}, on(name,handler){ if(name==='tool_call')permissionHook=handler; } });
+async function permissionTool(command) {
+  active=true;emit({type:'agent_start'});completeMessage(message('user',command.message));respond(command,{disposition:'started'});
+  const toolCallId=randomUUID();const toolName=command.message.includes('[child-permission]')?'bash':'write';
+  const input=toolName==='bash'?{command:'echo permission-check'}:{path:'approved.txt',content:'PI_PERMISSION_OK'};
+  emit({type:'tool_execution_start',toolCallId,toolName,args:input});
+  const blocked=await permissionHook({toolName,toolCallId,input},{cwd,hasUI:true,ui:{input:async(title,placeholder)=>new Promise(resolve=>{
+    const id=randomUUID();permissionWait={id,resolve};emit({type:'extension_ui_request',method:'input',id,title,placeholder});
+  })}});
+  const allowed=!blocked?.block;
+  if(allowed&&toolName==='write')writeFileSync(path.join(cwd,'approved.txt'),'PI_PERMISSION_OK');
+  emit({type:'tool_execution_end',toolCallId,toolName,isError:!allowed,result:{content:[{type:'text',text:allowed?'PERMISSION_ALLOWED':'PERMISSION_DENIED'}]}});
+  completeMessage(message('assistant',[{type:'text',text:allowed?'PERMISSION_ALLOWED':'PERMISSION_DENIED'}],{model:model.id,provider:model.provider,stopReason:'stop'}));
+  active=false;emit({type:'agent_end',willRetry:false});emit({type:'agent_settled',aborted:false});
+}
 const handle = command => {
   switch (command.type) {
     case 'get_state': {
@@ -91,13 +108,17 @@ const handle = command => {
     case 'get_messages': return respond(command, { messages: entries.filter(e => e.type === 'message').map(e => e.message) });
     case 'get_available_models': return respond(command, { models });
     case 'get_available_thinking_levels': return respond(command, { levels: model.reasoning ? ['off', 'low', 'medium', 'high'] : ['off'] });
-    case 'get_commands': return respond(command, { commands: [{ name: 'mcp', source: 'extension', sourceInfo: { path: 'builtin:mcp' }, description: 'Manage MCP servers' }, ...(bridgePath ? [{ name: 'desktop-context', source: 'extension', sourceInfo: { path: bridgePath }, description: 'Desktop context' }] : []), { name: 'confirm-test', source: 'extension', description: '测试扩展确认框' }, { name: 'skill:review', source: 'skill', description: '审查代码' }] });
+    case 'get_commands': return respond(command, { commands: [{ name: 'mcp', source: 'extension', sourceInfo: { path: 'builtin:mcp' }, description: 'Manage MCP servers' }, ...(bridgePath ? [{ name: 'desktop-permissions', source: 'extension', sourceInfo: { path: bridgePath }, description: 'Desktop permissions' }, { name: 'desktop-context', source: 'extension', sourceInfo: { path: bridgePath }, description: 'Desktop context' }] : []), { name: 'confirm-test', source: 'extension', description: '测试扩展确认框' }, { name: 'skill:review', source: 'skill', description: '审查代码' }] });
     case 'get_session_stats': {
       const usages = entries.filter(entry => entry.type === 'message' && entry.message.usage).map(entry => entry.message.usage);
       const total = key => usages.reduce((sum, usage) => sum + (usage[key] || 0), 0);
       return respond(command, { cost: usages.reduce((sum, usage) => sum + (usage.cost?.total || 0), 0), tokens: { input: total('input'), output: total('output'), cacheRead: total('cacheRead'), cacheWrite: total('cacheWrite'), total: total('totalTokens') }, contextUsage: { tokens: contextTokens, contextWindow: model.contextWindow, percent: contextTokens / model.contextWindow * 100 } });
     }
     case 'prompt': {
+      if(command.message==='/context-priority-test'){emit({type:'extension_ui_request',method:'notify',id:randomUUID(),notifyType:'info',message:'PI_DESKTOP_USAGE:'+JSON.stringify({usage:{tokens:10,contextWindow:model.contextWindow},modelKey:`${model.provider}/${model.id}`,estimated:true})});return respond(command,{disposition:'handled'});}
+
+      if(command.message==='/permission-write-test'||command.message.includes('[child-permission]')) {void permissionTool(command);return;}
+
       if (command.message === '/overflow-test') {
         const url = 'https://example.invalid/' + 'long-unbroken-path-'.repeat(36);
         const detail = 'OpenAI API error (524): ' + JSON.stringify({ type: url, detail: 'timeout', token: '界'.repeat(128) });
@@ -135,6 +156,8 @@ const handle = command => {
       return start(command);
     }
     case 'extension_ui_response':
+      if(permissionWait?.id===command.id){const pending=permissionWait;permissionWait=null;pending.resolve(command.cancelled?undefined:command.value);return;}
+
       if (scoutControl?.requestId === command.id) {
         const response = JSON.parse(command.value);
         if (!response.ok) { const original=scoutControl.command; scoutControl=null; active=false; emit({type:'agent_settled',aborted:true}); return respond(original,{disposition:'handled'}); }
@@ -152,6 +175,8 @@ const handle = command => {
     case 'clear_queue': { const previous = { steering: [...queue.steering], followUp: [...queue.followUp] }; queue.steering = []; queue.followUp = []; emit({ type: 'queue_update', ...queue }); return respond(command, previous); }
     case 'abort':
       timers.forEach(clearTimeout); timers = []; active = false;
+      if(permissionWait){const pending=permissionWait;permissionWait=null;pending.resolve(undefined);}
+
       if (scoutControl) { const original=scoutControl.command; const callId=scoutControl.callId; scoutControl=null; emit({type:'tool_execution_end',toolCallId:callId,toolName:'desktop_scout',isError:true,result:{content:[{type:'text',text:'父任务已取消'}]}});respond(original,{disposition:'handled'}); }
       if (compacting) { compacting = false; emit({ type: 'compaction_end', reason: 'manual', aborted: true }); emit({ type: 'response', id: compactCommand.id, command: 'compact', success: false, error: '压缩已取消' }); compactCommand = null; }
       emit({ type: 'agent_settled', aborted: true }); return respond(command);

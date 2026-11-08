@@ -13,12 +13,15 @@ export function IconButton({ label, children, onClick, disabled, className = '' 
   return <button type="button" className={`icon-button ${className}`} title={label} aria-label={label} onClick={onClick} disabled={disabled}>{children}</button>;
 }
 export function Modal({ title, children, onClose, wide = false, className = '' }: { title: string; children: ReactNode; onClose: () => void; wide?: boolean; className?: string }) {
+  const section=useRef<HTMLElement>(null), close=useRef(onClose);close.current=onClose;
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
     const key = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') { event.stopPropagation(); onClose(); }
+      const stack=Array.from(document.querySelectorAll('[role="dialog"][aria-modal="true"]'));
+      if(stack.at(-1)!==section.current)return;
+      if (event.key === 'Escape') { event.stopPropagation(); close.current(); }
       if (event.key === 'Tab') {
-        const modal = document.querySelector('[role="dialog"]');
+        const modal = section.current;
         const targets = Array.from(modal?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), summary, a[href]') || []).filter(element => element.getClientRects().length > 0 && getComputedStyle(element).visibility !== 'hidden');
         if (!targets?.length) return;
         const first = targets[0], last = targets[targets.length - 1];
@@ -27,10 +30,10 @@ export function Modal({ title, children, onClose, wide = false, className = '' }
       }
     };
     document.addEventListener('keydown', key, true);
-    const timer = setTimeout(() => document.querySelector<HTMLElement>('[role="dialog"] input, [role="dialog"] textarea, [role="dialog"] button')?.focus(), 20);
-    return () => { document.removeEventListener('keydown', key, true); clearTimeout(timer); previous?.focus(); };
+    const timer = setTimeout(() => section.current?.querySelector<HTMLElement>('input, textarea, button')?.focus(), 20);
+    return () => { document.removeEventListener('keydown', key, true); clearTimeout(timer);const top=Array.from(document.querySelectorAll('[role="dialog"][aria-modal="true"]')).at(-1);if(!top||previous&&top.contains(previous))previous?.focus(); };
   }, []);
-  return <div className="modal-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}><section className={`modal ${wide ? 'wide' : ''} ${className}`} role="dialog" aria-modal="true" aria-label={title}><header><h2>{title}</h2><IconButton label="关闭弹窗" onClick={onClose}><X size={18} /></IconButton></header>{children}</section></div>;
+  return <div className="modal-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}><section ref={section} className={`modal ${wide ? 'wide' : ''} ${className}`} role="dialog" aria-modal="true" aria-label={title}><header><h2>{title}</h2><IconButton label="关闭弹窗" onClick={onClose}><X size={18} /></IconButton></header>{children}</section></div>;
 }
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);

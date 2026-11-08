@@ -14,9 +14,11 @@
 - `prompt`：`text`，可选图片；立即返回，输出经独立事件流推送。
 - `cancel`：取消当前 ACP 任务，待处理权限回 cancelled；超时终止受管理的进程树。
 - `configure`：`configId` / `value`，只接受服务器当前列出的合法值，空闲时设置。
-- `set-permission-mode`：`mode` 为 `ask` 或 `full-access`，空闲时切换本次桌面运行的 CLI 启动权限；已连接时恢复到同一会话，失败保留原对话。收紧到 `ask` 即使连接失败，后续重连也保持 `ask`。
+- `set-permission-mode`：`mode` 为 `ask`、`smart`、`full-access` 或 `custom`，可附自定义 `rules`。策略只影响 CLI 发来的授权请求；完全访问使用官方启动参数。涉及完全访问的切换重连原会话，其余原地生效；收紧失败也保持所选非完全访问策略。
 - `permission`：桌面生成的权限 `id`，可选 `optionId`；校验属于当前连接/会话/请求，未选视为取消。
 - `disconnect`：取消任务并关闭本桌面创建的 ACP 进程树。
+
+0.7.0 另接入 `usage_update` 的上下文 `used/size`，与可选会话费用独立；模型改变清空旧值，恢复的显示缓存标记上次统计，缺失值保持未知。权限与信息卡的详细契约见 [权限与上下文](PERMISSIONS-CONTEXT.md)。
 
 ACP 事件经主窗口既有 Channel 传输，envelope 标记 `engine: antigravity`，与 Pi generation 事件分流；更新含单调 revision，避免响应/事件乱序覆盖。客户端不宣告文件系统或终端能力；未知服务端请求返回方法不支持，权限默认不自动批准。
 

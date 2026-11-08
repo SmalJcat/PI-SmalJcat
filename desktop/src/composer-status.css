@@ -1,0 +1,39 @@
+:root .composer-status-popover { position:fixed; z-index:110; box-sizing:border-box; overflow:auto; padding:10px; border:1px solid var(--border); border-radius:18px; background:var(--surface-raised,#2e2e2e); color:var(--text); box-shadow:0 10px 32px #0004; font-size:var(--type-label,13px); }
+:root .status-popover-heading { display:flex; justify-content:space-between; gap:12px; padding:5px 8px 9px; color:var(--muted); font-size:12px; }
+:root .status-popover-heading span { font-size:10px; }
+:root .permission-menu > button { display:flex; align-items:center; gap:12px; width:100%; padding:10px 8px; border-radius:10px; text-align:left; color:var(--text); }
+:root .permission-menu > button:hover,:root .permission-menu > button:focus-visible { background:var(--hover); }
+:root .permission-menu > button > span { flex:1; min-width:0; }
+:root .permission-menu strong { display:block; font-weight:500; font-size:14px; }
+:root .permission-menu small { display:block; color:var(--muted); font-size:11px; margin-top:3px; }
+:root .permission-menu > button[aria-checked=true] { color:var(--composer-blue); }
+:root .permission-menu > button[aria-checked=true] strong { color:var(--text); }
+:root .permission-menu > button[data-permission-mode=full-access][aria-checked=true] { color:var(--composer-access); }
+:root .app-shell .composer-area .composer .permission-trigger { color:var(--muted); }
+:root .app-shell .composer-area .composer .permission-trigger[data-mode=full-access] { color:var(--composer-access); }
+:root .permission-rules { display:flex; flex-direction:column; gap:12px; }
+:root .permission-rules .panel-checkbox { display:flex; align-items:center; gap:8px; font-size:12px; }
+:root .permission-rules > label:not(.panel-checkbox) { display:flex; flex-direction:column; gap:7px; font-size:12px; }
+:root .permission-rules textarea { width:100%; resize:vertical; padding:10px; border:1px solid var(--border); border-radius:8px; color:var(--text); background:var(--surface); font:12px/1.6 Consolas,monospace; }
+:root .permission-rules small,:root .permission-rules code,.permission-owner { color:var(--muted); font-size:11px; }
+:root .permission-rules code { overflow-wrap:anywhere; }
+:root .permission-arguments { overflow:auto; max-height:320px; white-space:pre-wrap; overflow-wrap:anywhere; padding:12px; border:1px solid var(--border); border-radius:8px; font-size:12px; }
+:root .permission-owner { overflow-wrap:anywhere; }
+:root .context-trigger { display:inline-flex; align-items:center; justify-content:center; flex:0 0 28px; width:28px; height:32px; color:var(--muted); border-radius:8px; }
+:root .context-trigger:hover,:root .context-trigger[aria-expanded=true] { color:var(--text); background:var(--hover); }
+:root .context-trigger.near-limit { color:var(--composer-access); }
+:root .context-ring-track,:root .context-ring-value { fill:none; stroke:currentColor; stroke-width:3; }
+:root .context-ring-track { opacity:.25; }
+:root .context-ring-value { transform:rotate(-90deg); transform-origin:center; stroke-linecap:round; }
+:root .context-card { padding:15px; }
+:root .context-card .status-popover-heading { padding:0 0 10px; }
+:root .context-card-percent { display:block; font-size:16px; font-weight:500; }
+:root .context-card-percent > span { color:var(--muted); font-size:13px; }
+:root .context-card p { margin:8px 0 12px; font-size:13px; }
+:root .context-card progress { display:block; width:100%; height:5px; appearance:none; border:0; border-radius:4px; overflow:hidden; }
+:root .context-card progress::-webkit-progress-bar { background:var(--hover); }
+:root .context-card progress::-webkit-progress-value { background:var(--composer-blue); }
+:root .context-card-details { display:flex; gap:12px; justify-content:space-between; margin-top:10px; color:var(--muted); font-size:11px; }
+:root .context-card-more { margin-top:10px; color:var(--muted); font-size:11px; }
+:root .context-card-more summary { cursor:pointer; }
+:root .context-settings { display:flex; align-items:center; justify-content:center; gap:6px; width:100%; border-top:1px solid var(--border); margin-top:13px; padding-top:11px; font-size:12px; color:var(--text); }

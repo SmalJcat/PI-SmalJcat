@@ -23,6 +23,8 @@ export async function initializeBridge() {
     sessionAccess: path => call('session-access', { path }),
     mcpStatus: reconnect => call('mcp-status', { reconnect }),
     contextStatus: () => call('context-status'),
+    contextUsage: () => call('context-usage'),
+    permissions: (options = {}) => call('permissions',options),
     contextConfigure: patch => call('context-settings', patch),
     agentTasks: (data = {}) => call('agent-tasks', data),
     searchFiles: query => call('search-files', { query }),

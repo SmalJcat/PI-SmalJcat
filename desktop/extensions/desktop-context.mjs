@@ -1,8 +1,17 @@
 // Runs inside Pi's extension host; no standalone Node.js runtime is required.
 import { SettingsManager, getAgentDir } from '@earendil-works/pi-coding-agent';
 import { Type } from '@sinclair/typebox';
+import desktopPermissions from './desktop-permissions.mjs';
 
 export default function desktopContext(pi) {
+  desktopPermissions(pi);
+  const reportUsage = (_event, ctx) => {
+    try {
+      const usage = ctx.getContextUsage();
+      ctx.ui.notify('PI_DESKTOP_USAGE:' + JSON.stringify({ usage: usage || null, modelKey: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : '', window: ctx.model?.contextWindow || null, estimated: true }), 'info');
+    } catch { /* Older/unknown hosts can still use the RPC statistics fallback. */ }
+  };
+  for (const event of ['session_start','session_switch','session_compact','model_select','agent_start','agent_end','agent_settled','message_end','turn_end']) pi.on(event, reportUsage);
   // Keep the same loaded settings snapshot as this Pi connection. Out-of-band
   // edits become effective when the extension runner is reloaded.
   let settingsSnapshot;

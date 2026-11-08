@@ -63,6 +63,7 @@ pub struct Core {
     pub agents: Arc<crate::agents::Manager>,
     context_history: crate::context::History,
     context_settings: Mutex<Option<Value>>,
+    context_usage_cache: Mutex<Option<Value>>,
     bridge_token: String,
     bridge_path: PathBuf,
     task_actions: AsyncMutex<()>,
@@ -116,11 +117,19 @@ impl Core {
             &bridge_path,
             include_str!("../../extensions/desktop-context.mjs"),
         )?;
+        fs::write(
+            data_dir.join("desktop-permissions.mjs"),
+            include_str!("../../extensions/desktop-permissions.mjs"),
+        )?;
         let agents = crate::agents::Manager::new(
             data_dir.join("agents"),
             workspace::agent_dir().join("desktop-session-locks"),
         )?;
         let context_history = crate::context::History::new(data_dir.join("context-attempts.json"))?;
+        agents.permissions.protect(data_dir)?;
+        let agent_dir = workspace::agent_dir();
+        fs::create_dir_all(&agent_dir)?;
+        agents.permissions.protect(&agent_dir)?;
         Ok(Arc::new(Self {
             preferences: AsyncMutex::new(preferences),
             preference_path,
@@ -139,6 +148,7 @@ impl Core {
             agents,
             context_history,
             context_settings: Mutex::new(None),
+            context_usage_cache: Mutex::new(None),
             bridge_token: uuid::Uuid::new_v4().to_string(),
             bridge_path,
             task_actions: AsyncMutex::new(()),
@@ -342,14 +352,11 @@ impl Core {
                 core.handle_event(generation, event);
             }
         });
-        let rpc = Rpc::spawn(
-            &executable,
-            &target,
-            &prefix,
-            &args,
-            sink,
-            &[("PI_DESKTOP_BRIDGE_TOKEN".into(), self.bridge_token.clone())],
-        )
+        let rpc = Rpc::spawn(&executable, &target, &prefix, &args, sink, &{
+            let mut environment = self.agents.permissions.environment();
+            environment.push(("PI_DESKTOP_BRIDGE_TOKEN".into(), self.bridge_token.clone()));
+            environment
+        })
         .await?;
         let active = Active {
             rpc: rpc.clone(),
@@ -357,7 +364,14 @@ impl Core {
             generation,
         };
         *self.active.write().await = Some(active.clone());
-        let result = self.snapshot_active(&active).await;
+        let result = async {
+            self.agents
+                .permissions
+                .verify(&rpc, &self.bridge_path)
+                .await?;
+            self.snapshot_active(&active).await
+        }
+        .await;
         match result {
             Ok(value) => {
                 if let Some(file) = value["state"]["sessionFile"].as_str() {
@@ -409,6 +423,68 @@ impl Core {
     }
     fn handle_event(self: &Arc<Self>, generation: u64, event: Value) {
         if generation != self.generation.load(Ordering::SeqCst) {
+            return;
+        }
+        if matches!(
+            event["type"].as_str(),
+            Some("compaction_start" | "compaction_end")
+        ) {
+            *self.context_usage_cache.lock().unwrap() = None;
+        }
+        if event["type"] == "extension_ui_request" && event["method"] == "notify" {
+            if let Some(raw) = event["message"]
+                .as_str()
+                .and_then(|s| s.strip_prefix("PI_DESKTOP_USAGE:"))
+            {
+                if raw.len() < 65536 {
+                    if let Ok(mut usage) = serde_json::from_str::<Value>(raw) {
+                        if !usage.is_object() {
+                            return;
+                        }
+                        usage["generation"] = json!(generation);
+                        *self.context_usage_cache.lock().unwrap() = Some(usage.clone());
+                        self.emit(generation, json!({"type":"context_usage","data":usage}));
+                    }
+                }
+                return;
+            }
+        }
+        if event["type"] == "extension_ui_request"
+            && event["method"] == "input"
+            && event["title"] == "PI_DESKTOP_PERMISSION_QUERY"
+        {
+            let core = self.clone();
+            tokio::spawn(async move {
+                if let Ok(active) = core.current().await {
+                    if active.generation == generation {
+                        core.agents
+                            .permissions
+                            .answer_query(&active.rpc, &event)
+                            .await;
+                    }
+                }
+            });
+            return;
+        }
+        if event["type"] == "extension_ui_request"
+            && event["method"] == "input"
+            && event["title"] == "PI_DESKTOP_PERMISSION"
+        {
+            let core = self.clone();
+            let ticket = self.agents.permissions.ticket("Pi");
+            tokio::spawn(async move {
+                if let Ok(active) = core.current().await {
+                    if active.generation == generation {
+                        core.agents.permissions.enqueue(
+                            active.rpc,
+                            "Pi",
+                            &active.cwd,
+                            &event,
+                            ticket,
+                        );
+                    }
+                }
+            });
             return;
         }
         if event["type"] == "tool_execution_start" && event["toolName"] == "desktop_scout" {
@@ -611,6 +687,9 @@ impl Core {
             }
         }
         if kind == "prompt" {
+            if !active.rpc.busy.load(Ordering::SeqCst) {
+                self.agents.permissions.begin_owner("Pi");
+            }
             if let Some(paths) = data.get("references") {
                 let paths: Vec<String> = serde_json::from_value(paths.clone())?;
                 let cwd = active.cwd.clone();
@@ -638,6 +717,9 @@ impl Core {
         } else {
             Duration::from_secs(120)
         };
+        if kind == "abort" {
+            self.agents.permissions.cancel_owner("Pi").await;
+        }
         let result = active.rpc.request(kind, data, duration).await;
         if result.is_ok() && kind == "set_model" {
             if let Ok(settings) = self.query_context_settings(&active, "get").await {
@@ -661,6 +743,7 @@ impl Core {
     }
     pub async fn stop(&self) -> Result<Value> {
         let active = self.current().await?;
+        self.agents.permissions.cancel_owner("Pi").await;
         {
             let _gate = self.task_actions.lock().await;
             for owner in self.delegations.lock().unwrap().drain() {
@@ -886,8 +969,102 @@ impl Core {
             .map(|reserve| window.saturating_sub(reserve));
         let entries = history["entries"].as_array().context("会话历史无效")?;
         let session = state["sessionFile"].as_str().unwrap_or_default();
+        let reported_usage = self
+            .context_usage_cache
+            .lock()
+            .unwrap()
+            .as_ref()
+            .filter(|u| u["generation"] == active.generation && u["modelKey"] == model_key)
+            .map(|u| u["usage"].clone())
+            .filter(Value::is_object)
+            .unwrap_or_else(|| stats["contextUsage"].clone());
+        let usage = stats
+            .get("contextUsage")
+            .filter(|value| value.is_object())
+            .cloned()
+            .unwrap_or(reported_usage);
         Ok(
-            json!({"generation":active.generation,"model":public_model(&state["model"]),"modelKey":model_key,"enabled":state["autoCompactionEnabled"],"isCompacting":state["isCompacting"],"busy":active.rpc.busy.load(Ordering::SeqCst),"settings":settings,"triggerTokens":trigger,"usage":stats["contextUsage"],"totals":stats,"history":self.context_history.list(session,entries,history["leafId"].as_str()),"storageError":self.context_history.error()}),
+            json!({"generation":active.generation,"model":public_model(&state["model"]),"modelKey":model_key,"enabled":state["autoCompactionEnabled"],"isCompacting":state["isCompacting"],"busy":active.rpc.busy.load(Ordering::SeqCst),"settings":settings,"triggerTokens":trigger,"usage":usage,"estimated":true,"totals":stats,"history":self.context_history.list(session,entries,history["leafId"].as_str()),"storageError":self.context_history.error()}),
+        )
+    }
+    pub async fn permission_action(&self, payload: Value) -> Result<Value> {
+        match payload["action"].as_str().unwrap_or("status") {
+            "status" => Ok(self.agents.permissions.status()),
+            "reply" => {
+                if self.closing.load(Ordering::SeqCst) || self.connecting.load(Ordering::SeqCst) {
+                    bail!("Pi 正在连接或关闭，未批准工具操作");
+                }
+                self.agents
+                    .permissions
+                    .reply(
+                        payload["id"].as_str().context("缺少授权请求")?,
+                        payload["allow"].as_bool().context("缺少授权选择")?,
+                    )
+                    .await
+            }
+            "set" => {
+                let _gate = self.operation.lock().await;
+                if self.connecting.load(Ordering::SeqCst) || self.agents.busy() {
+                    bail!("请先结束当前任务再修改权限");
+                }
+                if let Ok(active) = self.current().await {
+                    let state = active.rpc.call("get_state", json!({})).await?;
+                    if active.rpc.busy.load(Ordering::SeqCst)
+                        || state["isStreaming"] == true
+                        || state["isCompacting"] == true
+                    {
+                        bail!("任务运行中不能修改权限");
+                    }
+                }
+                let mode = crate::permissions::Mode::parse(
+                    payload["mode"].as_str().context("缺少权限模式")?,
+                )?;
+                let rules = payload
+                    .get("rules")
+                    .cloned()
+                    .map(serde_json::from_value)
+                    .transpose()?;
+                self.agents.permissions.set(mode, rules)
+            }
+            _ => bail!("未知权限操作"),
+        }
+    }
+    pub async fn context_usage(&self) -> Result<Value> {
+        let active = self.current().await?;
+        let (state, stats) = tokio::try_join!(
+            active.rpc.call("get_state", json!({})),
+            active.rpc.call("get_session_stats", json!({}))
+        )?;
+        let model_key = format!(
+            "{}/{}",
+            state["model"]["provider"].as_str().unwrap_or_default(),
+            state["model"]["id"].as_str().unwrap_or_default()
+        );
+        let settings = self
+            .context_settings
+            .lock()
+            .unwrap()
+            .clone()
+            .filter(|s| s["modelKey"] == model_key);
+        let report = self
+            .context_usage_cache
+            .lock()
+            .unwrap()
+            .clone()
+            .filter(|u| u["generation"] == active.generation && u["modelKey"] == model_key);
+        let usage = stats
+            .get("contextUsage")
+            .filter(|value| value.is_object())
+            .cloned()
+            .or_else(|| {
+                report
+                    .as_ref()
+                    .map(|report| report["usage"].clone())
+                    .filter(Value::is_object)
+            })
+            .unwrap_or(Value::Null);
+        Ok(
+            json!({"generation":active.generation,"modelKey":model_key,"usage":usage,"window":state["model"]["contextWindow"],"estimated":true,"compacting":state["isCompacting"],"busy":active.rpc.busy.load(Ordering::SeqCst),"autoCompact":state["autoCompactionEnabled"],"reserveTokens":settings.and_then(|settings|settings["reserveTokens"].as_u64()),"cost":stats["cost"]}),
         )
     }
     pub async fn configure_context(&self, patch: Value) -> Result<Value> {

@@ -126,6 +126,7 @@ enum Completion {
 }
 
 pub struct Manager {
+    pub permissions: Arc<crate::permissions::Manager>,
     root: PathBuf,
     lease_root: PathBuf,
     admin: Mutex<()>,
@@ -190,6 +191,7 @@ impl Manager {
             }
         }
         Ok(Arc::new(Self {
+            permissions: crate::permissions::Manager::new(root.join("permissions"))?,
             root,
             lease_root,
             admin: Mutex::new(()),
@@ -589,6 +591,7 @@ impl Manager {
         job.cancel
             .store(if interrupted { 2 } else { 1 }, Ordering::SeqCst);
         job.signal.send_replace(true);
+        self.permissions.cancel_owner_now(id);
         self.update(id, true, |task| task.status = "cancelling".into());
         self.detail(id)
     }
@@ -704,6 +707,13 @@ impl Manager {
             "--session-dir".into(),
             directory.to_string_lossy().into_owned(),
         ];
+        args.extend([
+            "-e".into(),
+            self.permissions
+                .extension_path
+                .to_string_lossy()
+                .into_owned(),
+        ]);
         if resume {
             args.extend([
                 "--session".into(),
@@ -719,11 +729,17 @@ impl Manager {
             args.push("--approve".into());
         }
         let (completion, mut done) = watch::channel(Completion::Pending);
+        self.permissions.begin_owner(id);
+        let permission_ticket = self.permissions.ticket(id);
+        let binding = Arc::new(Mutex::new(std::sync::Weak::<Rpc>::new()));
+        let source_binding = binding.clone();
         let weak = Arc::downgrade(self);
         let task_id = id.to_owned();
         let sink: EventSink = Arc::new(move |event| {
             if let Some(manager) = weak.upgrade() {
-                manager.event(&task_id, &event);
+                if let Some(source) = source_binding.lock().unwrap().upgrade() {
+                    manager.event(&task_id, &event, &source, permission_ticket.clone());
+                }
             }
             if event["type"] == "agent_settled" {
                 completion.send_replace(Completion::Settled);
@@ -745,13 +761,21 @@ impl Manager {
                 &runner.prefix,
                 &args,
                 sink,
-                &[("PI_DESKTOP_TASK_ID".into(), id.into())],
+                &{
+                    let mut environment = self.permissions.environment();
+                    environment.push(("PI_DESKTOP_TASK_ID".into(), id.into()));
+                    environment
+                },
             )
             .await?;
             self.pids.lock().unwrap().insert(rpc.pid);
             *job.rpc.lock().unwrap() = Some(rpc.clone());
+            *binding.lock().unwrap() = Arc::downgrade(&rpc);
             rpc
         };
+        self.permissions
+            .verify(&rpc, &self.permissions.extension_path)
+            .await?;
         let state = rpc.call("get_state", json!({})).await?;
         let session = PathBuf::from(
             state["sessionFile"]
@@ -792,7 +816,47 @@ impl Manager {
         }
         Ok(())
     }
-    fn event(&self, id: &str, event: &Value) {
+    fn event(&self, id: &str, event: &Value, source: &Arc<Rpc>, permission_ticket: Option<String>) {
+        let valid = self
+            .jobs
+            .lock()
+            .unwrap()
+            .get(id)
+            .and_then(|job| job.rpc.lock().unwrap().clone())
+            .is_some_and(|rpc| Arc::ptr_eq(&rpc, source));
+        if !valid {
+            return;
+        }
+        if event["type"] == "extension_ui_request"
+            && event["method"] == "input"
+            && event["title"] == "PI_DESKTOP_PERMISSION_QUERY"
+        {
+            let manager = self.permissions.clone();
+            let rpc = source.clone();
+            let event = event.clone();
+            tokio::spawn(async move {
+                manager.answer_query(&rpc, &event).await;
+            });
+            return;
+        }
+        if event["type"] == "extension_ui_request"
+            && event["title"] == "PI_DESKTOP_PERMISSION"
+            && event["method"] == "input"
+        {
+            {
+                let cwd = self
+                    .records
+                    .lock()
+                    .unwrap()
+                    .get(id)
+                    .map(|task| task.cwd.clone());
+                if let Some(cwd) = cwd {
+                    self.permissions
+                        .enqueue(source.clone(), id, &cwd, event, permission_ticket);
+                }
+            }
+            return;
+        }
         self.update(id,event["type"]=="message_end",|task|{
             if !task.active(){return;}
             match event["type"].as_str().unwrap_or_default(){

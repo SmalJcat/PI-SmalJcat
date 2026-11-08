@@ -126,6 +126,9 @@ impl Drop for PendingGuard {
 }
 
 impl Rpc {
+    pub fn accepting_input(&self) -> bool {
+        !self.closed.load(Ordering::SeqCst) && !self.stopping.load(Ordering::SeqCst)
+    }
     pub async fn spawn(
         executable: &Path,
         cwd: &Path,
@@ -358,6 +361,29 @@ impl Rpc {
             } => result,
         }
     }
+    /// Re-check approval ownership after acquiring the serialized writer. Once
+    /// this check passes, that response is committed and cannot be retracted.
+    pub async fn write_guarded(
+        &self,
+        record: Value,
+        current: impl FnOnce() -> bool + Send,
+    ) -> Result<bool> {
+        let mut shutdown = self.shutdown.subscribe();
+        if !self.accepting_input() || *shutdown.borrow() {
+            return Ok(false);
+        }
+        let mut bytes = serde_json::to_vec(&record)?;
+        bytes.push(b'\n');
+        tokio::select! {
+            _=shutdown.changed()=>Ok(false),
+            result=async {
+                let mut guard=self.stdin.lock().await;
+                if !self.accepting_input() || !current() {return Ok(false);}
+                let writer=guard.as_mut().context("Pi 输入管道已关闭")?;
+                writer.write_all(&bytes).await.context("写入 Pi 管道失败")?;writer.flush().await?;Ok(true)
+            }=>result,
+        }
+    }
     pub async fn request(
         self: &Arc<Self>,
         kind: &str,
@@ -415,6 +441,45 @@ pub fn hide_console(command: &mut Command) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn approval_is_rechecked_after_waiting_for_the_writer() {
+        let root = tempfile::tempdir().unwrap();
+        let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/fixture-pi.mjs");
+        let rpc = Rpc::spawn(
+            Path::new("node"),
+            root.path(),
+            &[script.to_string_lossy().into_owned()],
+            &["--no-session".into()],
+            Arc::new(|_| {}),
+            &[(
+                "PI_CODING_AGENT_DIR".into(),
+                root.path().join("agent").to_string_lossy().into_owned(),
+            )],
+        )
+        .await
+        .unwrap();
+        let held = rpc.stdin.lock().await;
+        let valid = Arc::new(AtomicBool::new(true));
+        let checked = Arc::new(AtomicBool::new(false));
+        let writer = rpc.clone();
+        let allowed = valid.clone();
+        let observed = checked.clone();
+        let response = tokio::spawn(async move {
+            writer
+                .write_guarded(json!({"type":"echo","id":"stale-approval"}), || {
+                    observed.store(true, Ordering::SeqCst);
+                    allowed.load(Ordering::SeqCst)
+                })
+                .await
+        });
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(!checked.load(Ordering::SeqCst));
+        valid.store(false, Ordering::SeqCst);
+        drop(held);
+        assert!(!response.await.unwrap().unwrap());
+        assert!(checked.load(Ordering::SeqCst));
+        rpc.stop().await;
+    }
     #[test]
     fn jsonl_split_utf8_and_unicode_separators() {
         let expected = json!({"text":"你好🙂\u{2028}line\u{2029}end"});

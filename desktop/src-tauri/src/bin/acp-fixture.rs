@@ -197,6 +197,11 @@ fn main() {
                 let state = state.clone();
                 let out = out.clone();
                 thread::spawn(move || {
+                    update(
+                        &out,
+                        &session,
+                        json!({"sessionUpdate":"usage_update","used":364000,"size":828000,"cost":{"amount":0.02,"currency":"USD"}}),
+                    );
                     let mut transcript = "ACP 中文".to_owned();
                     if image_count > 0 {
                         transcript.push_str(&format!(" ACP_IMAGE_COUNT:{image_count} "));
@@ -237,6 +242,21 @@ fn main() {
                     }
                     let mut suffix = "🙂 完成";
                     if text.contains("[permission]") {
+                        let kind = if text.contains("[local-edit]") {
+                            "edit"
+                        } else {
+                            "execute"
+                        };
+                        let input = if kind == "edit" {
+                            json!({"path":"approved.txt"})
+                        } else {
+                            json!({"command":"echo ACP_FIXTURE"})
+                        };
+                        let locations = if kind == "edit" {
+                            json!([{"path":std::env::current_dir().unwrap().join("approved.txt")}])
+                        } else {
+                            json!([])
+                        };
                         let tool_id = Uuid::new_v4().to_string();
                         let permission = Uuid::new_v4().to_string();
                         let (tx, rx) = mpsc::channel();
@@ -248,7 +268,7 @@ fn main() {
                         update(
                             &out,
                             &session,
-                            json!({"sessionUpdate":"tool_call","toolCallId":tool_id,"title":"测试命令","kind":"execute","status":"pending","rawInput":{"command":"echo ACP_FIXTURE"}}),
+                            json!({"sessionUpdate":"tool_call","toolCallId":tool_id,"title":"测试命令","kind":kind,"status":"pending","rawInput":input,"locations":locations}),
                         );
                         if full_access {
                             let _ = tx
@@ -256,7 +276,7 @@ fn main() {
                         } else {
                             send(
                                 &out,
-                                json!({"jsonrpc":"2.0","id":permission,"method":"session/request_permission","params":{"sessionId":session,"toolCall":{"toolCallId":tool_id,"title":"测试命令","rawInput":{"command":"echo ACP_FIXTURE"}},"options":[{"optionId":"allow","name":"允许一次","kind":"allow_once"},{"optionId":"reject","name":"拒绝","kind":"reject_once"}]}}),
+                                json!({"jsonrpc":"2.0","id":permission,"method":"session/request_permission","params":{"sessionId":session,"toolCall":{"toolCallId":tool_id,"title":"测试命令","kind":kind,"rawInput":input,"locations":locations},"options":[{"optionId":"allow","name":"允许一次","kind":"allow_once"},{"optionId":"reject","name":"拒绝","kind":"reject_once"}]}}),
                             );
                         }
                         let result = loop {

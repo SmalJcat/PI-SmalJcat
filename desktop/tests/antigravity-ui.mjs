@@ -1,3 +1,4 @@
+import {choosePermission} from './composer-status-ui.mjs';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 
@@ -27,14 +28,14 @@ export async function officialAntigravityChecks(page, artifacts, checks, waitFor
   const id = state.sessionId, originalPid = state.pid;
   const input = panel.getByRole('textbox', { name: 'Antigravity 消息', exact: true });
   await input.fill('权限切换保留草稿');
-  await panel.getByLabel('Antigravity 权限', { exact: true }).selectOption('full-access');
+  await choosePermission(page,panel,'Antigravity','full-access');
   state = await waitForValue(status, state => state.connected && !state.connecting && state.permissionMode === 'full-access', 90000);
   assert.equal(state.sessionId, id); assert.notEqual(state.pid, originalPid);
   await waitForProcessExit(originalPid);
   assert.equal(await input.inputValue(), '权限切换保留草稿');
   assert.ok((await trigger.innerText()).includes(chosen.name));
-  await page.screenshot({ path: path.join(artifacts, 'v063-official-desktop.png') });
-  await panel.getByLabel('Antigravity 权限', { exact: true }).selectOption('ask');
+  await page.screenshot({ path: path.join(artifacts, 'v070-official-desktop.png') });
+  await choosePermission(page,panel,'Antigravity','ask');
   state = await waitForValue(status, state => state.connected && !state.connecting && state.permissionMode === 'ask', 90000);
   assert.equal(state.sessionId, id);
   const pid = state.pid;
@@ -57,6 +58,10 @@ export async function antigravityChecks(page, artifacts, checks, waitForValue, w
   let state = await waitForValue(status, state => state.connected && !state.connecting && state.sessionId);
   const id = state.sessionId;
   const input = panel.getByRole('textbox', { name: 'Antigravity 消息', exact: true });
+  await page.getByRole('button',{name:'Antigravity 上下文信息',exact:true}).click();
+  let context=page.getByRole('dialog',{name:'Antigravity 上下文信息',exact:true});await context.waitFor();
+  assert.match(await context.innerText(),/用量待统计/);assert.equal(await context.getByRole('progressbar').count(),0);
+  await page.keyboard.press('Escape');
   await input.fill('ACP_UI_TEST [permission]'); await input.press('Enter');
   let permission = page.getByRole('dialog', { name: 'Antigravity 工具权限', exact: true });
   await permission.waitFor();
@@ -70,6 +75,24 @@ export async function antigravityChecks(page, artifacts, checks, waitForValue, w
   await permission.getByRole('button', { name: '允许一次', exact: true }).click();
   await waitForValue(status, state => !state.busy);
   await panel.locator('.markdown').filter({ hasText: 'ACP_PERMISSION_ALLOWED' }).first().waitFor();
+  await panel.getByRole('button',{name:'Antigravity 上下文用量',exact:true}).click();
+  context=page.getByRole('dialog',{name:'Antigravity 上下文信息',exact:true});await context.waitFor();
+  assert.match(await context.innerText(),/44% 已用/);assert.match(await context.innerText(),/剩余 56%/);assert.match(await context.innerText(),/364k/);assert.match(await context.innerText(),/828k/);
+  await page.screenshot({path:path.join(artifacts,'v070-acp-context.png')});await page.keyboard.press('Escape');
+  const policyPid=(await status()).pid;
+  await choosePermission(page,panel,'Antigravity','smart');await waitForValue(status,state=>state.permissionMode==='smart');
+  assert.equal((await status()).pid,policyPid,'Client approval policy changes do not restart the CLI');
+  await input.fill('[permission] [local-edit]');await input.press('Enter');await waitForValue(status,state=>!state.busy);
+  assert.equal((await status()).permissions.length,0);
+  await choosePermission(page,panel,'Antigravity','custom');
+  const custom=page.getByRole('dialog',{name:'Antigravity 自定义权限',exact:true});
+  await custom.getByLabel('Antigravity 禁止工具',{exact:true}).fill('edit');await custom.getByRole('button',{name:'保存并启用',exact:true}).click();
+  await waitForValue(status,state=>state.permissionMode==='custom');
+  await input.fill('[permission] [local-edit]');await input.press('Enter');await waitForValue(status,state=>!state.busy);
+  assert.equal((await status()).permissions.length,0);
+  assert.ok(JSON.stringify((await status()).messages.at(-1)).includes('ACP_PERMISSION_DENIED'));
+  await choosePermission(page,panel,'Antigravity','ask');await waitForValue(status,state=>state.permissionMode==='ask');
+  checks.push('ACP 真实 usage_update 显示 44%/364k/828k、未知不伪装零；四档授权中自动批准与自定义拒绝生效，策略切换保留进程');
   checks.push('官方 ACP 夹具流式中文、工具显示、权限等待与允许/拒绝');
 
   await panel.getByRole('button', { name: '模型与推理强度', exact: true }).click();
@@ -93,7 +116,7 @@ export async function antigravityChecks(page, artifacts, checks, waitForValue, w
   await panel.getByRole('button', { name: '添加 Antigravity 附件', exact: true }).click();
   await panel.locator('.attachment').filter({ hasText: 'draft.png' }).waitFor();
   const beforePolicy = await status();
-  await panel.getByLabel('Antigravity 权限', { exact: true }).selectOption('full-access');
+  await choosePermission(page,panel,'Antigravity','full-access');
   state = await waitForValue(status, state => state.connected && !state.connecting && state.permissionMode === 'full-access');
   assert.equal(state.sessionId, id); assert.notEqual(state.pid, beforePolicy.pid);
   await waitForProcessExit(beforePolicy.pid);
@@ -116,8 +139,8 @@ export async function antigravityChecks(page, artifacts, checks, waitForValue, w
   state = await waitForValue(status, state => !state.busy && state.messages.some(message => JSON.stringify(message).includes('ACP_IMAGE_COUNT:1')));
   assert.equal(state.permissions.length, 0);
   await page.waitForFunction(() => !document.querySelector('.antigravity-main .attachment'));
-  await page.screenshot({ path: path.join(artifacts, 'v063-antigravity.png') });
-  await panel.getByLabel('Antigravity 权限', { exact: true }).selectOption('ask');
+  await page.screenshot({ path: path.join(artifacts, 'v070-antigravity.png') });
+  await choosePermission(page,panel,'Antigravity','ask');
   await waitForValue(status, state => state.connected && !state.connecting && state.permissionMode === 'ask');
   checks.push('输入栏直接显示当前模型/档位，权限切换真正重启 CLI 且保留会话/配置/草稿/附件；发送失败保留附件');
   await input.fill('Antigravity 独立草稿');
@@ -170,7 +193,7 @@ export async function antigravityChecks(page, artifacts, checks, waitForValue, w
   checks.push('ACP 长流式中文/emoji/URL 完整呈现，连续 2048 组内容不丢失、不突破消息宽度');
   const originalViewport = await page.evaluate(() => ({ width: innerWidth, height: innerHeight }));
   await page.setViewportSize({ width: 1024, height: 768 });
-  await page.screenshot({ path: path.join(artifacts, 'v063-antigravity-small.png') });
+  await page.screenshot({ path: path.join(artifacts, 'v070-antigravity-small.png') });
   const editorBounds = await input.boundingBox(); assert.ok(editorBounds.x >= 0 && editorBounds.x + editorBounds.width <= 1024);
   const toolbar = panel.locator('.composer-toolbar');
   assert.ok(await toolbar.evaluate(element => element.scrollWidth <= element.clientWidth + 1));
@@ -192,7 +215,7 @@ export async function antigravityChecks(page, artifacts, checks, waitForValue, w
   await panel.getByRole('status').filter({ hasText: '未恢复模型' }).waitFor();
   assert.equal(await input.inputValue(), '配置恢复失败仍保留的草稿');
   assert.deepEqual(state.messages, beforeRecovery.messages);
-  await page.screenshot({ path: path.join(artifacts, 'v063-config-warning.png') });
+  await page.screenshot({ path: path.join(artifacts, 'v070-config-warning.png') });
   checks.push('配置明确拒绝仍保持连接，显示 CLI 实际模型与恢复提示，保留消息和草稿');
   await input.fill('[allow-restore-config]'); await input.press('Enter');
   await waitForValue(status, state => !state.busy);

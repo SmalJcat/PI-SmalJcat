@@ -1,3 +1,4 @@
+import {composerStatusChecks} from './composer-status-ui.mjs';
 import { antigravityChecks, officialAntigravityChecks } from './antigravity-ui.mjs';
 import { composerModelChecks } from './composer-model-ui.mjs';
 import { overflowChecks } from './overflow-ui.mjs';
@@ -173,6 +174,7 @@ try {
     assert.ok(startup.totalMs > 0 && startup.totalMs < 30000, '启动总耗时应当在合理区间：' + startup.totalMs);
     const breakdown = stages.map(stage => stage.name + ' ' + stage.atMs).join(' · ');
     checks.push('启动耗时（总计 ' + startup.totalMs + 'ms｜' + breakdown + '）');
+    await composerStatusChecks(page, artifacts, checks, waitForValue);
     await composerModelChecks(page, artifacts, checks);
     checks.push('模型和思考强度');
     await editor.fill('/confirm-test'); await editor.press('Enter');

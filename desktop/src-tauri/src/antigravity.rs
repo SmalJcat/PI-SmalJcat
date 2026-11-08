@@ -1,4 +1,5 @@
 //! Official Antigravity ACP v1 client. Credentials remain owned by agy.
+use crate::permissions::{Mode as PermissionMode, Rules};
 use crate::rpc::{hide_console, EventSink, JsonLines};
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -250,27 +251,12 @@ struct Conversation {
     config_options: Vec<Value>,
     commands: Vec<Value>,
     interrupted: bool,
+    context_usage: Option<Value>,
 }
 #[derive(Clone)]
 struct Permission {
     rpc_id: Value,
     params: Value,
-}
-#[derive(Clone, Copy, Default, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "kebab-case")]
-enum PermissionMode {
-    #[default]
-    Ask,
-    FullAccess,
-}
-impl PermissionMode {
-    fn parse(value: &str) -> Result<Self> {
-        match value {
-            "ask" => Ok(Self::Ask),
-            "full-access" => Ok(Self::FullAccess),
-            _ => bail!("无效 Antigravity 权限模式"),
-        }
-    }
 }
 #[derive(Default)]
 struct State {
@@ -287,6 +273,9 @@ struct State {
     capabilities: Value,
     agent_info: Value,
     permission_mode: PermissionMode,
+    permission_rules: Rules,
+    permission_error: String,
+    protected_root: PathBuf,
     conversation: Conversation,
     permissions: BTreeMap<String, Permission>,
 }
@@ -305,9 +294,20 @@ impl Antigravity {
         Self::with_launcher(data_dir, None)
     }
     pub fn with_launcher(data_dir: PathBuf, launcher: Option<LaunchSpec>) -> Arc<Self> {
+        let rules = crate::permissions::load_rules(&data_dir.join("permission-rules.json"));
+        let state = State {
+            permission_error: rules
+                .as_ref()
+                .err()
+                .map(ToString::to_string)
+                .unwrap_or_default(),
+            permission_rules: rules.unwrap_or_default(),
+            protected_root: data_dir.parent().unwrap_or(&data_dir).to_owned(),
+            ..Default::default()
+        };
         Arc::new(Self {
             data_dir,
-            state: Mutex::new(State::default()),
+            state: Mutex::new(state),
             connection: AsyncMutex::new(None),
             operation: AsyncMutex::new(()),
             cache_gate: AsyncMutex::new(()),
@@ -323,7 +323,7 @@ impl Antigravity {
         state.busy || state.connecting
     }
     fn summary(state: &State) -> Value {
-        json!({"revision":state.revision,"connected":state.connected,"connecting":state.connecting,"busy":state.busy,"cancelling":state.cancelling,"capabilities":state.capabilities,"error":state.error,"warning":state.warning,"pid":state.pid,"sessionId":state.conversation.session_id,"cwd":state.conversation.cwd,"configOptions":state.conversation.config_options,"agentInfo":state.agent_info,"permissionMode":state.permission_mode,"permissions":state.permissions.iter().map(|(id,request)|json!({"id":id,"toolCall":request.params["toolCall"],"options":request.params["options"]})).collect::<Vec<_>>()})
+        json!({"revision":state.revision,"connected":state.connected,"connecting":state.connecting,"busy":state.busy,"cancelling":state.cancelling,"capabilities":state.capabilities,"error":state.error,"warning":state.warning,"pid":state.pid,"sessionId":state.conversation.session_id,"cwd":state.conversation.cwd,"configOptions":state.conversation.config_options,"agentInfo":state.agent_info,"permissionMode":state.permission_mode,"permissionRules":state.permission_rules,"permissionConfigError":state.permission_error,"contextUsage":state.conversation.context_usage,"permissions":state.permissions.iter().map(|(id,request)|json!({"id":id,"toolCall":request.params["toolCall"],"options":request.params["options"]})).collect::<Vec<_>>()})
     }
     pub fn status(&self) -> Value {
         let state = self.state.lock().unwrap();
@@ -331,6 +331,7 @@ impl Antigravity {
         value["messages"] = json!(state.conversation.messages);
         value["tools"] = json!(state.conversation.tools);
         value["executable"] = json!(self.saved_executable().to_string_lossy());
+        value["permissionConfigFile"] = json!(self.data_dir.join("permission-rules.json"));
         value
     }
     fn change(&self, update: impl FnOnce(&mut State) -> Value) {
@@ -446,10 +447,33 @@ impl Antigravity {
             .await
     }
     pub async fn set_permission_mode(self: &Arc<Self>, mode: &str) -> Result<Value> {
+        self.set_permission_policy(mode, None).await
+    }
+    pub async fn set_permission_policy(
+        self: &Arc<Self>,
+        mode: &str,
+        rules: Option<Rules>,
+    ) -> Result<Value> {
         let mode = PermissionMode::parse(mode)?;
         let _operation = self.operation.lock().await;
         if self.busy() {
             bail!("请先停止当前 Antigravity 任务");
+        }
+        if let Some(rules) = rules {
+            rules.validate()?;
+            crate::context::atomic_json(
+                &self.data_dir.join("permission-rules.json"),
+                &json!(rules),
+            )?;
+            self.change(|state| {
+                state.permission_rules = rules;
+                state.permission_error.clear();
+                json!({})
+            });
+        }
+        if mode == PermissionMode::Custom && !self.state.lock().unwrap().permission_error.is_empty()
+        {
+            bail!("自定义权限配置无效，请先保存有效规则");
         }
         let (current, connected, cwd) = {
             let state = self.state.lock().unwrap();
@@ -462,7 +486,9 @@ impl Antigravity {
         if mode == current {
             return Ok(self.status());
         }
-        if connected {
+        if connected
+            && (current == PermissionMode::FullAccess || mode == PermissionMode::FullAccess)
+        {
             // ACP has no runtime approval selector. The official flag applies to a
             // process, so reopen the same session with an explicitly selected policy.
             self.connect_inner(Path::new(&cwd), None, mode, true).await
@@ -563,8 +589,8 @@ impl Antigravity {
                 state.conversation = previous;
                 // A failed attempt to restrict access must never make the next
                 // ordinary reconnect silently enable the previous full access.
-                state.permission_mode = if permission_mode == PermissionMode::Ask {
-                    PermissionMode::Ask
+                state.permission_mode = if permission_mode != PermissionMode::FullAccess {
+                    permission_mode
                 } else {
                     previous_mode
                 };
@@ -601,6 +627,12 @@ impl Antigravity {
                 }
             }
         }
+        if let Some(usage) = cached
+            .as_mut()
+            .and_then(|cached| cached.context_usage.as_mut())
+        {
+            usage["stale"] = json!(true);
+        }
         let resumable =
             self.state.lock().unwrap().capabilities["sessionCapabilities"]["resume"].is_object();
         let method = if id.is_none() {
@@ -636,6 +668,20 @@ impl Antigravity {
         });
         if let Some(previous) = &cached {
             self.restore_configuration(connection, previous).await?;
+            self.change(|state| {
+                if state.conversation.context_usage.is_none() {
+                    if let Some(usage) = previous
+                        .context_usage
+                        .as_ref()
+                        .filter(|u| u["modelId"] == model_id(&state.conversation))
+                    {
+                        let mut usage = usage.clone();
+                        usage["stale"] = json!(true);
+                        state.conversation.context_usage = Some(usage);
+                    }
+                }
+                json!({})
+            });
         }
         self.save().await;
         Ok(())
@@ -780,6 +826,7 @@ impl Antigravity {
     }
     fn apply_config_response(&self, id: &str, value: &str, response: &Value) {
         self.change(|state| {
+            let previous = model_id(&state.conversation).to_owned();
             if let Some(options) = response["configOptions"].as_array() {
                 state.conversation.config_options = options.clone();
             } else if let Some(option) = state
@@ -789,6 +836,9 @@ impl Antigravity {
                 .find(|item| item["id"] == id)
             {
                 option["currentValue"] = json!(value);
+            }
+            if previous != model_id(&state.conversation) {
+                state.conversation.context_usage = None;
             }
             json!({})
         });
@@ -837,7 +887,7 @@ impl Antigravity {
                 state.turn + 1,
             )
         };
-        self.change(|state| { state.busy = true; state.cancelling = false; state.turn = turn; state.conversation.interrupted = true; state.error.clear(); let message = json!({"_key":Uuid::new_v4().to_string(),"role":"user","content":if images.is_empty() {json!(text)} else {json!(blocks)}}); state.conversation.messages.push(message.clone()); json!({"message":message}) });
+        self.change(|state| { state.busy = true; state.cancelling = false; state.turn = turn; state.conversation.interrupted = true; if let Some(usage)=state.conversation.context_usage.as_mut(){usage["stale"]=json!(true);} state.error.clear(); let message = json!({"_key":Uuid::new_v4().to_string(),"role":"user","content":if images.is_empty() {json!(text)} else {json!(blocks)}}); state.conversation.messages.push(message.clone()); json!({"message":message}) });
         self.save().await;
         let owner = self.clone();
         tokio::spawn(async move {
@@ -893,6 +943,24 @@ impl Antigravity {
                     && params["sessionId"] == state.conversation.session_id
             };
             if allowed {
+                let automatic = {
+                    let state = self.state.lock().unwrap();
+                    if state.epoch != epoch || !state.busy || state.cancelling {
+                        None
+                    } else {
+                        match automatic_permission(&state,&params) {
+                            Some((false,outcome))=>Some((false,outcome)),
+                            Some((true,outcome)) if connection.writer.try_send(json!({"jsonrpc":"2.0","id":message["id"],"result":{"outcome":outcome}})).is_ok()=>Some((true,outcome)),
+                            _=>None,
+                        }
+                    }
+                };
+                if let Some((granted, outcome)) = automatic {
+                    if !granted {
+                        let _=connection.send(json!({"jsonrpc":"2.0","id":message["id"],"result":{"outcome":outcome}})).await;
+                    }
+                    return;
+                }
                 let id = Uuid::new_v4().to_string();
                 let mut inserted = false;
                 self.change(|state| {
@@ -1030,6 +1098,99 @@ fn has_option(options: &Value, value: &str) -> bool {
             .any(|item| item["value"] == value || has_option(&item["options"], value))
     })
 }
+fn model_id(conversation: &Conversation) -> &str {
+    conversation
+        .config_options
+        .iter()
+        .find(|option| option["category"] == "model" || option["id"] == "model")
+        .and_then(|option| option["currentValue"].as_str())
+        .unwrap_or_default()
+}
+fn automatic_permission(state: &State, params: &Value) -> Option<(bool, Value)> {
+    let call = &params["toolCall"];
+    let kind = call["kind"].as_str().unwrap_or("other");
+    let name = call["rawInput"]["toolName"].as_str().unwrap_or(kind);
+    let mut paths = call["locations"]
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item["path"].as_str())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if let Some(path) = call["rawInput"]["path"]
+        .as_str()
+        .or_else(|| call["rawInput"]["file_path"].as_str())
+    {
+        paths.push(path);
+    }
+    let local = !paths.is_empty()
+        && call["rawInput"].get("command").is_none()
+        && paths
+            .iter()
+            .all(|path| crate::permissions::within(Path::new(&state.conversation.cwd), path));
+    let reading = matches!(kind, "read" | "search");
+    let edit = kind == "edit"
+        && call["rawInput"].get("command").is_none()
+        && !paths.iter().any(|path| {
+            path.split(['/', '\\']).any(|part| {
+                matches!(
+                    part.to_ascii_lowercase().as_str(),
+                    ".git" | ".pi" | ".codex"
+                )
+            })
+        });
+    let protected_edit = kind == "edit"
+        && paths.iter().any(|target| {
+            let target = Path::new(target);
+            let target = if target.is_absolute() {
+                target.to_owned()
+            } else {
+                Path::new(&state.conversation.cwd).join(target)
+            };
+            !state.protected_root.as_os_str().is_empty()
+                && crate::permissions::within(&state.protected_root, &target.to_string_lossy())
+        });
+    let decision = match state.permission_mode {
+        PermissionMode::Smart if local && (reading || edit && !protected_edit) => Some(true),
+        PermissionMode::Custom => state
+            .permission_rules
+            .decision(&[name, kind])
+            .filter(|allow| !*allow || !protected_edit)
+            .or({
+                if reading && (local || state.permission_rules.allow_external_reads)
+                    || edit
+                        && local
+                        && !protected_edit
+                        && state.permission_rules.allow_workspace_edits
+                {
+                    Some(true)
+                } else {
+                    None
+                }
+            }),
+        _ => None,
+    }?;
+    let option = params["options"]
+        .as_array()
+        .and_then(|items| {
+            items.iter().find(|item| {
+                item["kind"]
+                    == if decision {
+                        "allow_once"
+                    } else {
+                        "reject_once"
+                    }
+            })
+        })
+        .and_then(|option| option["optionId"].as_str());
+    match (decision, option) {
+        (_, Some(option)) => Some((decision, json!({"outcome":"selected","optionId":option}))),
+        (false, None) => Some((false, json!({"outcome":"cancelled"}))),
+        _ => None,
+    }
+}
 fn assistant(conversation: &mut Conversation) -> &mut Value {
     if conversation
         .messages
@@ -1060,6 +1221,32 @@ fn assistant(conversation: &mut Conversation) -> &mut Value {
 }
 fn apply_update(conversation: &mut Conversation, update: &Value) -> Value {
     match update["sessionUpdate"].as_str().unwrap_or_default() {
+        "usage_update" => {
+            let mut reported = false;
+            if let (Some(used), Some(size)) = (update["used"].as_u64(), update["size"].as_u64()) {
+                if size > 0 && size <= 9_007_199_254_740_991 && used <= 9_007_199_254_740_991 {
+                    let mut usage = json!({"used":used,"size":size,"stale":false,"modelId":model_id(conversation),"updatedAt":crate::context::now()});
+                    if let (Some(amount), Some(currency)) = (
+                        update["cost"]["amount"]
+                            .as_f64()
+                            .filter(|n| n.is_finite() && *n >= 0.0),
+                        update["cost"]["currency"].as_str().filter(|s| {
+                            s.len() <= 12 && s.chars().all(|c| c.is_ascii_alphabetic())
+                        }),
+                    ) {
+                        usage["cost"] = json!({"amount":amount,"currency":currency});
+                    }
+                    conversation.context_usage = Some(usage);
+                    reported = true;
+                }
+            }
+            if !reported {
+                if let Some(usage) = conversation.context_usage.as_mut() {
+                    usage["stale"] = json!(true);
+                }
+            }
+            json!({})
+        }
         "agent_message_chunk" | "agent_thought_chunk" | "user_message_chunk" => {
             let user = update["sessionUpdate"] == "user_message_chunk";
             if user
@@ -1130,8 +1317,12 @@ fn apply_update(conversation: &mut Conversation, update: &Value) -> Value {
             json!({"message":conversation.messages.last(),"tool":tool,"toolId":id})
         }
         "config_option_update" => {
+            let previous = model_id(conversation).to_owned();
             if let Some(options) = update["configOptions"].as_array() {
                 conversation.config_options = options.clone();
+            }
+            if previous != model_id(conversation) {
+                conversation.context_usage = None;
             }
             json!({})
         }
@@ -1220,6 +1411,65 @@ fn proxy_address(value: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn usage_updates_track_context_not_billing_and_reset_on_model_change() {
+        let mut conversation = Conversation {
+            config_options: vec![json!({"id":"model","category":"model","currentValue":"model-a"})],
+            ..Default::default()
+        };
+        apply_update(
+            &mut conversation,
+            &json!({"sessionUpdate":"usage_update","used":364000,"size":828000,"cost":{"amount":0.2,"currency":"USD"}}),
+        );
+        assert_eq!(conversation.context_usage.as_ref().unwrap()["used"], 364000);
+        assert_eq!(
+            conversation.context_usage.as_ref().unwrap()["modelId"],
+            "model-a"
+        );
+        apply_update(
+            &mut conversation,
+            &json!({"sessionUpdate":"usage_update","used":-1,"size":0}),
+        );
+        assert_eq!(conversation.context_usage.as_ref().unwrap()["used"], 364000);
+        assert_eq!(conversation.context_usage.as_ref().unwrap()["stale"], true);
+        apply_update(
+            &mut conversation,
+            &json!({"sessionUpdate":"config_option_update","configOptions":[{"id":"model","category":"model","currentValue":"model-b"}]}),
+        );
+        assert!(conversation.context_usage.is_none());
+        apply_update(
+            &mut conversation,
+            &json!({"sessionUpdate":"usage_update","used":0,"size":200000}),
+        );
+        assert_eq!(conversation.context_usage.as_ref().unwrap()["used"], 0);
+    }
+    #[test]
+    fn automatic_approval_is_scoped_and_never_chooses_allow_always() {
+        let root = tempfile::tempdir().unwrap();
+        let work = root.path().join("work");
+        std::fs::create_dir(&work).unwrap();
+        let mut state = State {
+            permission_mode: PermissionMode::Smart,
+            conversation: Conversation {
+                cwd: work.to_string_lossy().into_owned(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut request = json!({"toolCall":{"kind":"edit","rawInput":{"path":"new.txt"}},"options":[{"kind":"allow_once","optionId":"allow"},{"kind":"reject_once","optionId":"reject"}]});
+        assert!(automatic_permission(&state, &request).unwrap().0);
+        request["toolCall"]["rawInput"]["path"] = json!("../outside.txt");
+        assert!(automatic_permission(&state, &request).is_none());
+        request["toolCall"]["rawInput"]["path"] = json!("new.txt");
+        request["options"] = json!([{"kind":"allow_always","optionId":"broad"}]);
+        assert!(automatic_permission(&state, &request).is_none());
+        state.permission_mode = PermissionMode::Custom;
+        state.permission_rules.deny_tools = vec!["edit".into()];
+        assert_eq!(
+            automatic_permission(&state, &request).unwrap().1["outcome"],
+            "cancelled"
+        );
+    }
     #[tokio::test]
     async fn request_timeout_is_distinct_from_an_agent_rejection() {
         let (writer, _reader) = mpsc::channel(2);

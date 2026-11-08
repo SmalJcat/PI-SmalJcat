@@ -12,6 +12,7 @@ pub mod index_store;
 pub mod mcp;
 pub mod mcp_apps;
 pub mod mcp_client;
+pub mod permissions;
 pub mod retention;
 pub mod review;
 pub mod rpc;

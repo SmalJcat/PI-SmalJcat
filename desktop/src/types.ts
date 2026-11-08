@@ -54,6 +54,8 @@ export interface PiApi {
   sessionAccess(path: string): Promise<{available: boolean; reason: string; canFork: boolean}>;
   mcpStatus(reconnect?: string): Promise<Wire>;
   contextStatus(): Promise<Wire>;
+  contextUsage(): Promise<Wire>;
+  permissions(options?: Wire): Promise<Wire>;
   contextConfigure(patch: Wire): Promise<Wire>;
   agentTasks(data?: Wire): Promise<Wire>;
   searchFiles(query: string): Promise<{files: FileEntry[]; truncated: boolean}>;
