@@ -32,6 +32,8 @@ pub struct Runner {
 pub struct NewTask {
     pub task: String,
     pub cwd: PathBuf,
+    /// 子代理角色 id；缺省为只读探子，保持既有行为。
+    pub role: Option<String>,
     pub parent_session: String,
     pub model: String,
     pub thinking: String,
@@ -68,6 +70,12 @@ pub struct Task {
     pub system_prompt: String,
     pub owner: String,
     pub project_trusted: bool,
+    /// 角色 id（scout / verifier / editor / runner）。
+    pub role: String,
+    /// 可写角色的工作树路径；只读角色为空。
+    pub worktree: Option<String>,
+    /// 可写角色产出的分支。
+    pub branch: Option<String>,
     #[serde(skip)]
     last_saved: u64,
 }
@@ -128,6 +136,10 @@ pub struct Manager {
     pub launch_lock: AsyncMutex<()>,
     pids: Mutex<HashSet<u32>>,
     warnings: Mutex<Vec<String>>,
+    /// 本地索引：记录写入后同步，避免"要手点重建才有新数据"。
+    index: Mutex<Option<Arc<crate::index_store::IndexStore>>>,
+    /// 自上次同步以来变动过的任务 id。
+    dirty: Mutex<HashSet<String>>,
 }
 impl Manager {
     pub fn new(root: PathBuf, lease_root: PathBuf) -> Result<Arc<Self>> {
@@ -188,7 +200,90 @@ impl Manager {
             launch_lock: AsyncMutex::new(()),
             pids: Mutex::new(HashSet::new()),
             warnings: Mutex::new(warnings),
+            index: Mutex::new(None),
+            dirty: Mutex::new(HashSet::new()),
         }))
+    }
+
+    /// 挂上索引并在启动时全量对齐一次：这样每次启动都能自愈历史漂移。
+    pub fn attach_index(&self, index: Arc<crate::index_store::IndexStore>) {
+        *self.index.lock().unwrap() = Some(index);
+        self.sync_index_all();
+    }
+
+    /// 把全部记录写进索引（启动对齐 / 手工修复）。
+    pub fn sync_index_all(&self) {
+        let index = self.index.lock().unwrap().clone();
+        let Some(index) = index else {
+            return;
+        };
+        let records = self.records.lock().unwrap();
+        let mut synced = 0_u64;
+        for task in records.values() {
+            let value = serde_json::to_value(task).unwrap_or(Value::Null);
+            if index.upsert(&value).unwrap_or(false) {
+                synced += 1;
+            }
+        }
+        let total = records.len() as u64;
+        drop(records);
+        self.dirty.lock().unwrap().clear();
+        // 记录被删过时索引里会留下孤儿：按 id 集合清理一遍
+        if synced < total {
+            let ids = index.ids().unwrap_or_default();
+            for id in ids {
+                if !self.records.lock().unwrap().contains_key(&id) {
+                    let _ = index.remove(&id);
+                }
+            }
+        }
+    }
+
+    /// 同步自上次以来变动过的记录。列表查询前调用，保证界面看到的与索引一致。
+    pub fn flush_index(&self) {
+        let index = self.index.lock().unwrap().clone();
+        let Some(index) = index else {
+            return;
+        };
+        let pending: Vec<String> = {
+            let mut dirty = self.dirty.lock().unwrap();
+            if dirty.is_empty() {
+                return;
+            }
+            dirty.drain().collect()
+        };
+        for id in pending {
+            let record = self.records.lock().unwrap().get(&id).cloned();
+            match record {
+                Some(task) => {
+                    let value = serde_json::to_value(&task).unwrap_or(Value::Null);
+                    let _ = index.upsert(&value);
+                }
+                None => {
+                    let _ = index.remove(&id);
+                }
+            }
+        }
+    }
+
+    /// 标记某个任务需要同步。
+    fn mark_dirty(&self, id: &str) {
+        if self.index.lock().unwrap().is_some() {
+            self.dirty.lock().unwrap().insert(id.to_owned());
+        }
+    }
+    /// 忘记一条任务：从内存与索引里移除。调用方负责先删掉记录文件（保留策略走这条路）。
+    pub fn forget(&self, id: &str) {
+        self.records.lock().unwrap().remove(id);
+        self.dirty.lock().unwrap().remove(id);
+        if let Some(index) = self.index.lock().unwrap().clone() {
+            let _ = index.remove(id);
+        }
+    }
+
+    /// 任务记录根目录（存储用量面板要用）。
+    pub fn root(&self) -> &Path {
+        &self.root
     }
     pub fn pids(&self) -> HashSet<u32> {
         self.pids.lock().unwrap().clone()
@@ -203,6 +298,7 @@ impl Manager {
             task.updated_at = now();
             if force || now().saturating_sub(task.last_saved) > 500 {
                 task.last_saved = now();
+                self.mark_dirty(id);
                 if let Err(error) = atomic_json(
                     &self.root.join(format!("{id}.json")),
                     &serde_json::to_value(&*task).unwrap_or(Value::Null),
@@ -230,6 +326,8 @@ impl Manager {
             .expect("default history query is valid")
     }
     pub fn query(&self, data: &Value) -> Result<Value> {
+        // 列表查询前把变动同步进索引：界面看到的检索结果与记录保持一致
+        self.flush_index();
         let query: crate::agent_history::Query = serde_json::from_value(data.clone())?;
         let page_size = query.page_size()?;
         let records = self.records.lock().unwrap();
@@ -270,6 +368,14 @@ impl Manager {
         )?;
         let result = task.public(true);
         records.insert(id.to_owned(), task);
+        drop(records);
+        // 归档会改 archived_at，索引里的归档筛选必须跟着变
+        if let Some(current) = self.records.lock().unwrap().get(id).cloned() {
+            let value = serde_json::to_value(&current).unwrap_or(Value::Null);
+            if let Some(index) = self.index.lock().unwrap().clone() {
+                let _ = index.upsert(&value);
+            }
+        }
         Ok(result)
     }
     fn session_path(&self, task: &Task) -> Result<PathBuf> {
@@ -323,6 +429,7 @@ impl Manager {
         let NewTask {
             task,
             cwd,
+            role,
             parent_session,
             model,
             thinking,
@@ -342,13 +449,35 @@ impl Manager {
         if !cwd.is_dir() {
             bail!("工作区不存在");
         }
+        // 角色决定工具白名单与是否需要独立工作树；可写角色必须隔离，否则拒绝。
+        let role = crate::agent_roles::resolve(
+            role.as_deref().unwrap_or(crate::agent_roles::DEFAULT_ROLE),
+        )?;
+        crate::agent_roles::ensure_supported(role, crate::worktree::is_repo(&cwd))?;
         let id = Uuid::new_v4().to_string();
+        let mut worktree_path: Option<String> = None;
+        let mut branch: Option<String> = None;
+        if crate::agent_roles::needs_worktree(role) {
+            let target = self.root.join("worktrees").join(&id);
+            let name = crate::worktree::branch_for(&id);
+            let created = crate::worktree::create(&cwd, &target, &name)?;
+            worktree_path = Some(created.path);
+            branch = Some(created.branch);
+        }
+        let run_cwd = workspace::canonical(Path::new(&crate::agent_roles::effective_cwd(
+            role,
+            &cwd.to_string_lossy(),
+            worktree_path.as_deref(),
+        )?))?;
         let time = now();
         let record = Task {
             id: id.clone(),
             agent: "default".into(),
             task,
-            cwd,
+            cwd: run_cwd,
+            role: role.id.to_owned(),
+            worktree: worktree_path,
+            branch,
             parent_session,
             model,
             thinking,
@@ -408,6 +537,7 @@ impl Manager {
                 NewTask {
                     task: old.task,
                     cwd: old.cwd,
+                    role: Some(old.role),
                     parent_session: old.parent_session,
                     model: old.model,
                     thinking: old.thinking,
@@ -546,9 +676,13 @@ impl Manager {
         let directory = self.root.join(id);
         fs::create_dir_all(&directory)?;
         let prompt = directory.join("system.txt");
+        let role = crate::agent_roles::resolve(&record.role)?;
         fs::write(
             &prompt,
-            format!("{DEFAULT_PROMPT}\n\n{}", record.system_prompt),
+            format!(
+                "{DEFAULT_PROMPT}\n\n{}\n\n{}",
+                role.prompt, record.system_prompt
+            ),
         )?;
         let mut args = vec![
             "--offline".into(),
@@ -558,7 +692,7 @@ impl Manager {
             "--no-prompt-templates".into(),
             "--no-context-files".into(),
             "--tools".into(),
-            READ_TOOLS.into(),
+            crate::agent_roles::tools_argument(role),
             "--exclude-tools".into(),
             "mcp__*".into(),
             "--model".into(),
@@ -811,6 +945,55 @@ pub fn definition(agent_dir: &Path) -> Result<Value> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn index_follows_record_updates() {
+        use crate::index_store::IndexStore;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("agent");
+        std::fs::create_dir_all(&root).unwrap();
+        // 造一条历史记录，模拟上次运行留下的任务。
+        // 记录加载器要求 id 是合法 UUID 且文件名与 id 一致（见 Manager::new），所以这里必须用真 UUID。
+        const TASK_ID: &str = "11111111-1111-4111-8111-111111111111";
+        std::fs::write(
+            root.join(format!("{TASK_ID}.json")),
+            serde_json::to_vec(&serde_json::json!({
+                "id": TASK_ID, "task": "检查登录流程", "status": "completed", "createdAt": 1, "updatedAt": 1
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let manager = Manager::new(root, dir.path().join("lease")).unwrap();
+        let index = Arc::new(IndexStore::open(&dir.path().join("index.sqlite")).unwrap());
+        manager.attach_index(index.clone());
+
+        // 挂载即全量对齐：不用手点重建，启动后索引就是可用的
+        assert_eq!(index.count(), 1, "挂载时应当把已有记录全量对齐");
+        assert_eq!(
+            index
+                .search(&serde_json::json!({"query": "检查登录"}))
+                .unwrap()["total"],
+            1
+        );
+
+        // 记录变更后，flush 一次索引就跟上（界面每次列表查询前都会 flush）
+        manager.update(TASK_ID, true, |task| task.status = "failed".into());
+        manager.flush_index();
+        assert_eq!(
+            index
+                .search(&serde_json::json!({"status": "failed"}))
+                .unwrap()["total"],
+            1,
+            "变更后索引应当跟上"
+        );
+        assert_eq!(
+            index
+                .search(&serde_json::json!({"status": "completed"}))
+                .unwrap()["total"],
+            0
+        );
+    }
+
     use super::*;
     #[test]
     fn archive_rejects_completed_record_until_job_finishes_cleanup() {

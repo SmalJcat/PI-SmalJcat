@@ -8,7 +8,7 @@ import json from 'highlight.js/lib/languages/json';
 import css from 'highlight.js/lib/languages/css';
 import xml from 'highlight.js/lib/languages/xml';
 import bash from 'highlight.js/lib/languages/bash';
-import { Copy, Check, ArrowUpRight, RefreshCw, Plug, CircleAlert, LoaderCircle } from 'lucide-react';
+import { Copy, Check, ArrowUpRight, RefreshCw, Plug, CircleAlert, LoaderCircle } from './icons';
 import { Modal, IconButton } from './components';
 import type { Preview, Wire } from './types';
 for (const [name,language] of Object.entries({javascript,typescript,rust,python,json,css,xml,bash})) hljs.registerLanguage(name,language);

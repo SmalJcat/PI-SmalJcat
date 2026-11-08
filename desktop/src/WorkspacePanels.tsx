@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Brain, Check, Layers, LoaderCircle, RefreshCw, Square } from 'lucide-react';
+import { Brain, Check, Layers, LoaderCircle, RefreshCw, Square } from './icons';
 import { Modal, RichText } from './components';
 import type { Wire } from './types';
 import './workspace-panels.css';

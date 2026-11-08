@@ -146,7 +146,7 @@ pub fn session_output(path: &Path) -> Result<(String, String)> {
     texts.reverse();
     Ok((texts.join("\n\n"), version))
 }
-fn message_text(content: &Value) -> String {
+pub(crate) fn message_text(content: &Value) -> String {
     content.as_str().map(String::from).unwrap_or_else(|| {
         content
             .as_array()

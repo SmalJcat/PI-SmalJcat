@@ -1,0 +1,37 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { sourceIdentity } from '../scripts/source-identity.mjs';
+
+test('source identity tracks committed, edited and untracked code but excludes documentation and generated output', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'pi-source-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const git = args => promisify(execFile)('git', args, { cwd: root, windowsHide: true });
+  await git(['init']);
+  await mkdir(path.join(root, 'desktop'));
+  const desktop = path.join(root, 'desktop');
+  await writeFile(path.join(root, '.gitignore'), 'artifacts/\nrelease/\n');
+  await writeFile(path.join(desktop, 'main.js'), 'one');
+  await git(['add', '.']);
+  await git(['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '-m', 'fixture']);
+  const base = await sourceIdentity(desktop);
+  assert.equal(base.dirty, false);
+  assert.equal(base.files, 1);
+  await mkdir(path.join(desktop, 'docs'));
+  await writeFile(path.join(desktop, 'docs/status.md'), 'documentation');
+  await mkdir(path.join(desktop, 'artifacts'));
+  await writeFile(path.join(desktop, 'artifacts/run.log'), 'generated');
+  assert.equal((await sourceIdentity(desktop)).sha256, base.sha256);
+  await writeFile(path.join(desktop, 'main.js'), 'two');
+  const edited = await sourceIdentity(desktop);
+  assert.equal(edited.dirty, true);
+  assert.notEqual(edited.sha256, base.sha256);
+  await writeFile(path.join(desktop, 'new.js'), 'new untracked input');
+  assert.notEqual((await sourceIdentity(desktop)).sha256, edited.sha256);
+  assert.equal((await sourceIdentity(desktop)).files, 2);
+  assert.equal((await sourceIdentity(desktop)).commit, base.commit);
+});

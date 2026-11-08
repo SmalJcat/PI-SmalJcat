@@ -24,6 +24,12 @@ pub struct Preferences {
     pub executable: String,
     pub last_workspace: String,
     pub recent_workspaces: Vec<String>,
+    /// 系统集成开关：需要在后端启动时读取，因此与其它偏好一起落地。
+    pub launch_at_login: bool,
+    pub close_to_tray: bool,
+    pub notifications: bool,
+    /// 归档任务的保留天数：0 表示永久保留（默认）。
+    pub archived_retention_days: i64,
 }
 #[derive(Clone)]
 pub struct Active {
@@ -161,6 +167,37 @@ impl Core {
             Value::Null
         };
         json!({"preferences":*self.preferences.lock().await,"agentDir":self.agent_dir,"version":env!("CARGO_PKG_VERSION"),"runtime":"tauri","recovery":recovery})
+    }
+    /// 更新归档保留期（天）。只接受固定档位，非法值直接拒绝而不是悄悄取默认。
+    pub async fn set_retention(&self, days: i64) -> Result<Preferences> {
+        if !crate::retention::is_valid_retention(days) {
+            anyhow::bail!("保留期只支持 0 / 90 / 180 / 365 天");
+        }
+        let mut next = self.preferences().await;
+        next.archived_retention_days = days;
+        self.save_preferences(next.clone()).await?;
+        Ok(next)
+    }
+
+    /// 更新系统集成开关，其余偏好保持不变。
+    pub async fn set_system_preferences(
+        &self,
+        launch_at_login: Option<bool>,
+        close_to_tray: Option<bool>,
+        notifications: Option<bool>,
+    ) -> Result<Preferences> {
+        let mut next = self.preferences().await;
+        if let Some(value) = launch_at_login {
+            next.launch_at_login = value;
+        }
+        if let Some(value) = close_to_tray {
+            next.close_to_tray = value;
+        }
+        if let Some(value) = notifications {
+            next.notifications = value;
+        }
+        self.save_preferences(next.clone()).await?;
+        Ok(next)
     }
     pub async fn preferences(&self) -> Preferences {
         self.preferences.lock().await.clone()
@@ -1033,6 +1070,7 @@ impl Core {
                             crate::agents::NewTask {
                                 task,
                                 cwd: active.cwd.clone(),
+                                role: data["role"].as_str().map(str::to_owned),
                                 parent_session: state["sessionFile"]
                                     .as_str()
                                     .unwrap_or_default()

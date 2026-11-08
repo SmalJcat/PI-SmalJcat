@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type RefObject } from 'react';
-import { FilePlus2, LoaderCircle, Terminal } from 'lucide-react';
+import { FilePlus2, LoaderCircle, Terminal } from './icons';
 import type { FileEntry, Wire } from './types';
 import { applyCompletion, commandSuggestions, completionAt, completionKeyAction } from './completions.mjs';
 import './composer-completions.css';

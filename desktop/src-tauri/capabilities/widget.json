@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "widget",
+  "description": "沙箱 widget 窗口只允许事件通道；文件、进程与应用命令都不开放，且自定义命令会按窗口标签再校验一次。",
+  "windows": ["widget-*"],
+  "permissions": ["core:event:allow-listen", "core:event:allow-unlisten"]
+}

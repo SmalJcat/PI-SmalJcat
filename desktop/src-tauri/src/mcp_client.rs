@@ -1,0 +1,972 @@
+//! 桌面端自己的 MCP 客户端（路线图 P1.2）。
+//!
+//! 与 mcp.rs 的区别：mcp.rs 解析 Pi 内置 /mcp 命令的文本输出（Pi 视角）；
+//! 这里由桌面进程直接按 MCP 协议连接服务器，拿到结构化的工具清单并可以调用。
+//! 服务器定义沿用 Pi 的 mcp.json（mcpServers 结构），因此两边看到的是同一份配置。
+//!
+//! 传输：stdio 完整实现；Streamable HTTP 通过系统 curl.exe 完成请求/响应，
+//! 不引入新的第三方依赖。所有调用都有超时，子进程在断开或析构时被终止。
+
+use crate::rpc::{hide_console, JsonLines};
+use anyhow::{bail, Context, Result};
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use std::{
+    collections::{BTreeMap, HashMap},
+    fs,
+    path::{Path, PathBuf},
+    process::Stdio,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
+    time::Duration,
+};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    process::{Child, ChildStdin, Command},
+    sync::{mpsc, oneshot, Mutex as AsyncMutex},
+};
+
+/// 与 Codex / DSH 对齐的协议版本。
+pub const PROTOCOL_VERSION: &str = "2025-06-18";
+/// 单个请求的默认超时（秒）；服务器可用 timeout 字段覆盖工具调用超时。
+pub const DEFAULT_TIMEOUT_SECS: u64 = 60;
+const HANDSHAKE_TIMEOUT_SECS: u64 = 30;
+const MAX_STDERR: usize = 8 * 1024;
+const MAX_DESCRIPTION: usize = 400;
+const MAX_SCHEMA: usize = 8000;
+const MAX_RESULT: usize = 256 * 1024;
+
+fn default_enabled() -> bool {
+    true
+}
+
+/// mcp.json 中的一个服务器定义。stdio 用 command/args/env，HTTP 用 url/headers。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServerConfig {
+    /// mcp.json 的键；反序列化原始条目时由调用方补上。
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub command: Option<String>,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub headers: BTreeMap<String, String>,
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub timeout: Option<u64>,
+    #[serde(default)]
+    pub exposure: Option<String>,
+}
+
+impl ServerConfig {
+    /// 传输类型：stdio / http / invalid（既没有 command 也没有 url）。
+    pub fn transport(&self) -> &'static str {
+        match (&self.command, &self.url) {
+            (Some(command), _) if !command.trim().is_empty() => "stdio",
+            (_, Some(url)) if !url.trim().is_empty() => "http",
+            _ => "invalid",
+        }
+    }
+
+    fn tool_timeout(&self) -> Duration {
+        Duration::from_secs(self.timeout.unwrap_or(DEFAULT_TIMEOUT_SECS).clamp(1, 3600))
+    }
+}
+
+/// 展开 PLACEHOLDER_NAME 形式的环境变量引用；缺失的名字记录到 missing。
+pub fn expand_env(value: &str, missing: &mut Vec<String>) -> String {
+    let mut out = String::with_capacity(value.len());
+    let bytes = value.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'$' && index + 1 < bytes.len() && bytes[index + 1] == b'{' {
+            if let Some(end) = value[index + 2..].find('}') {
+                let name = &value[index + 2..index + 2 + end];
+                match std::env::var(name) {
+                    Ok(found) => out.push_str(&found),
+                    Err(_) => {
+                        if !missing.iter().any(|value| value == name) {
+                            missing.push(name.to_owned());
+                        }
+                        out.push_str(&value[index..index + 2 + end + 1]);
+                    }
+                }
+                index += 2 + end + 1;
+                continue;
+            }
+        }
+        let ch = value[index..].chars().next().unwrap_or_default();
+        out.push(ch);
+        index += ch.len_utf8();
+    }
+    out
+}
+
+/// 读取 mcp.json 并返回可直接给界面用的服务器列表。
+pub fn load_servers(agent_dir: &Path) -> Value {
+    let path = agent_dir.join("mcp.json");
+    let mut warnings: Vec<String> = Vec::new();
+    let Ok(text) = fs::read_to_string(&path) else {
+        return json!({
+            "path": path.to_string_lossy(),
+            "exists": false,
+            "servers": [],
+            "warnings": ["未找到 mcp.json"],
+        });
+    };
+    let parsed: Value = match serde_json::from_str(&text) {
+        Ok(value) => value,
+        Err(error) => {
+            return json!({
+                "path": path.to_string_lossy(),
+                "exists": true,
+                "servers": [],
+                "warnings": [format!("mcp.json 不是合法 JSON：{error}")],
+            });
+        }
+    };
+    let mut servers = Vec::new();
+    if let Some(map) = parsed.get("mcpServers").and_then(|value| value.as_object()) {
+        for (name, raw) in map {
+            let mut missing: Vec<String> = Vec::new();
+            let command = raw
+                .get("command")
+                .and_then(|value| value.as_str())
+                .map(|value| expand_env(value, &mut missing));
+            let args: Vec<String> = raw
+                .get("args")
+                .and_then(|value| value.as_array())
+                .map(|values| {
+                    values
+                        .iter()
+                        .map(|value| expand_env(value.as_str().unwrap_or_default(), &mut missing))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let env: BTreeMap<String, String> = raw
+                .get("env")
+                .and_then(|value| value.as_object())
+                .map(|values| {
+                    values
+                        .iter()
+                        .map(|(key, value)| {
+                            (
+                                key.clone(),
+                                expand_env(value.as_str().unwrap_or_default(), &mut missing),
+                            )
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let url = raw
+                .get("url")
+                .and_then(|value| value.as_str())
+                .map(|value| expand_env(value, &mut missing));
+            let headers: BTreeMap<String, String> = raw
+                .get("headers")
+                .and_then(|value| value.as_object())
+                .map(|values| {
+                    values
+                        .iter()
+                        .map(|(key, value)| {
+                            (
+                                key.clone(),
+                                expand_env(value.as_str().unwrap_or_default(), &mut missing),
+                            )
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let config = ServerConfig {
+                name: name.clone(),
+                command,
+                args,
+                env,
+                url,
+                headers,
+                enabled: raw
+                    .get("enabled")
+                    .and_then(|value| value.as_bool())
+                    .unwrap_or(true),
+                timeout: raw.get("timeout").and_then(|value| value.as_u64()),
+                exposure: raw
+                    .get("exposure")
+                    .and_then(|value| value.as_str())
+                    .map(str::to_owned),
+            };
+            if config.transport() == "invalid" {
+                warnings.push(format!("{name}：既没有 command 也没有 url，已跳过"));
+            }
+            if !missing.is_empty() {
+                warnings.push(format!("{name}：缺少环境变量 {}", missing.join("、")));
+            }
+            servers.push(json!({
+                "name": config.name,
+                "transport": config.transport(),
+                "command": config.command,
+                "url": config.url,
+                "enabled": config.enabled,
+                "timeout": config.timeout,
+                "exposure": config.exposure,
+                "envKeys": config.env.keys().cloned().collect::<Vec<_>>(),
+                "headerKeys": config.headers.keys().cloned().collect::<Vec<_>>(),
+                "missingEnv": missing,
+            }));
+        }
+    } else {
+        warnings.push("mcp.json 缺少 mcpServers 对象".into());
+    }
+    servers.sort_by(|left, right| {
+        left["name"]
+            .as_str()
+            .unwrap_or_default()
+            .cmp(right["name"].as_str().unwrap_or_default())
+    });
+    json!({
+        "path": path.to_string_lossy(),
+        "exists": true,
+        "servers": servers,
+        "warnings": warnings,
+    })
+}
+
+/// 读取单个服务器的完整定义（含 env / headers），并展开环境变量。
+pub fn find_server(agent_dir: &Path, name: &str) -> Result<ServerConfig> {
+    let text = fs::read_to_string(agent_dir.join("mcp.json")).context("无法读取 mcp.json")?;
+    let parsed: Value = serde_json::from_str(&text).context("mcp.json 不是合法 JSON")?;
+    let raw = parsed
+        .get("mcpServers")
+        .and_then(|value| value.as_object())
+        .and_then(|map| map.get(name))
+        .with_context(|| format!("mcp.json 中没有名为 {name} 的服务器"))?;
+    let config: ServerConfig = serde_json::from_value(raw.clone()).context("服务器定义格式无效")?;
+    let mut missing = Vec::new();
+    let mut config = ServerConfig {
+        name: name.to_owned(),
+        ..config
+    };
+    config.command = config.command.map(|value| expand_env(&value, &mut missing));
+    config.args = config
+        .args
+        .iter()
+        .map(|value| expand_env(value, &mut missing))
+        .collect();
+    config.env = config
+        .env
+        .iter()
+        .map(|(key, value)| (key.clone(), expand_env(value, &mut missing)))
+        .collect();
+    config.url = config.url.map(|value| expand_env(&value, &mut missing));
+    config.headers = config
+        .headers
+        .iter()
+        .map(|(key, value)| (key.clone(), expand_env(value, &mut missing)))
+        .collect();
+    Ok(config)
+}
+
+// ---------------------------------------------------------------- 会话
+
+/// 一次已建立的 MCP 连接。stdio 会话持有子进程；HTTP 会话按请求结束后释放。
+pub struct McpSession {
+    pub name: String,
+    transport: &'static str,
+    /// (serverInfo, protocolVersion)：握手完成后写入。
+    handshake: Mutex<(Value, String)>,
+    tools: AsyncMutex<Vec<Value>>,
+    child: AsyncMutex<Option<Child>>,
+    stdin: AsyncMutex<Option<ChildStdin>>,
+    pending: Mutex<HashMap<u64, oneshot::Sender<Value>>>,
+    next_id: AtomicU64,
+    stderr: Mutex<String>,
+    config: ServerConfig,
+}
+
+impl Drop for McpSession {
+    fn drop(&mut self) {
+        // 尽力终止子进程：不依赖调用方记得断开。
+        if let Ok(mut child) = self.child.try_lock() {
+            if let Some(child) = child.as_mut() {
+                let _ = child.start_kill();
+            }
+        }
+    }
+}
+
+impl McpSession {
+    /// 建立连接：stdio 启动子进程并完成 initialize；HTTP 直接握手。
+    pub async fn connect(config: ServerConfig) -> Result<Arc<Self>> {
+        match config.transport() {
+            "stdio" => Self::connect_stdio(config).await,
+            "http" => Self::connect_http(config).await,
+            _ => bail!("{}：既没有 command 也没有 url", config.name),
+        }
+    }
+
+    async fn connect_stdio(config: ServerConfig) -> Result<Arc<Self>> {
+        let command_line = config.command.clone().context("缺少 command")?;
+        let mut command = Command::new(&command_line);
+        command
+            .args(&config.args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+        for (key, value) in &config.env {
+            command.env(key, value);
+        }
+        hide_console(&mut command);
+        let mut child = command
+            .spawn()
+            .with_context(|| format!("无法启动 {command_line}"))?;
+        let stdin = child.stdin.take().context("子进程 stdin 不可用")?;
+        let mut stdout = child.stdout.take().context("子进程 stdout 不可用")?;
+        let mut stderr = child.stderr.take().context("子进程 stderr 不可用")?;
+
+        let session = Arc::new(Self {
+            name: config.name.clone(),
+            transport: "stdio",
+            handshake: Mutex::new((Value::Null, PROTOCOL_VERSION.to_owned())),
+            tools: AsyncMutex::new(Vec::new()),
+            child: AsyncMutex::new(Some(child)),
+            stdin: AsyncMutex::new(Some(stdin)),
+            pending: Mutex::new(HashMap::new()),
+            next_id: AtomicU64::new(1),
+            stderr: Mutex::new(String::new()),
+            config,
+        });
+
+        let (line_tx, mut line_rx) = mpsc::channel::<Value>(256);
+        tokio::spawn(async move {
+            let mut parser = JsonLines::default();
+            let mut buffer = vec![0_u8; 32 * 1024];
+            loop {
+                match stdout.read(&mut buffer).await {
+                    Ok(0) => break,
+                    Ok(count) => match parser.push(&buffer[..count]) {
+                        Ok(messages) => {
+                            for message in messages {
+                                if line_tx.send(message).await.is_err() {
+                                    return;
+                                }
+                            }
+                        }
+                        Err(_) => break,
+                    },
+                    Err(_) => break,
+                }
+            }
+        });
+        // stderr 只保留尾部，用于连接失败时给出可读原因。
+        let stderr_session = session.clone();
+        tokio::spawn(async move {
+            let mut buffer = vec![0_u8; 4096];
+            let mut collected = String::new();
+            loop {
+                match stderr.read(&mut buffer).await {
+                    Ok(0) => break,
+                    Ok(count) => {
+                        collected.push_str(&String::from_utf8_lossy(&buffer[..count]));
+                        if collected.len() > MAX_STDERR {
+                            let keep = collected.len() - MAX_STDERR;
+                            collected.drain(..keep);
+                        }
+                        if let Ok(mut slot) = stderr_session.stderr.lock() {
+                            *slot = collected.clone();
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+        // 把响应派发给等待者。
+        let dispatch_session = session.clone();
+        tokio::spawn(async move {
+            while let Some(message) = line_rx.recv().await {
+                if let Some(id) = message.get("id").and_then(|value| value.as_u64()) {
+                    let waiter = dispatch_session.pending.lock().unwrap().remove(&id);
+                    if let Some(waiter) = waiter {
+                        let _ = waiter.send(message);
+                    }
+                }
+            }
+        });
+
+        let response = session
+            .request(
+                "initialize",
+                json!({
+                    "protocolVersion": PROTOCOL_VERSION,
+                    "capabilities": {},
+                    "clientInfo": { "name": "pi-desktop", "version": env!("CARGO_PKG_VERSION") },
+                }),
+                Duration::from_secs(HANDSHAKE_TIMEOUT_SECS),
+            )
+            .await?;
+        session.notify("notifications/initialized", json!({})).await;
+        // request() 已经取出 result，这里直接读它的字段。
+        let info = response["serverInfo"].clone();
+        let protocol = response["protocolVersion"]
+            .as_str()
+            .unwrap_or(PROTOCOL_VERSION)
+            .to_owned();
+        session.set_handshake(info, protocol);
+        Ok(session)
+    }
+
+    fn set_handshake(&self, info: Value, protocol: String) {
+        if let Ok(mut slot) = self.handshake.lock() {
+            *slot = (info, protocol);
+        }
+    }
+
+    /// 服务器自报信息（握手前为 null）。
+    pub fn server_info(&self) -> Value {
+        self.handshake
+            .lock()
+            .map(|value| value.0.clone())
+            .unwrap_or(Value::Null)
+    }
+
+    /// 协商到的协议版本。
+    pub fn protocol(&self) -> String {
+        self.handshake
+            .lock()
+            .map(|value| value.1.clone())
+            .unwrap_or_else(|_| PROTOCOL_VERSION.to_owned())
+    }
+
+    async fn connect_http(config: ServerConfig) -> Result<Arc<Self>> {
+        let session = Arc::new(Self {
+            name: config.name.clone(),
+            transport: "http",
+            handshake: Mutex::new((Value::Null, PROTOCOL_VERSION.to_owned())),
+            tools: AsyncMutex::new(Vec::new()),
+            child: AsyncMutex::new(None),
+            stdin: AsyncMutex::new(None),
+            pending: Mutex::new(HashMap::new()),
+            next_id: AtomicU64::new(1),
+            stderr: Mutex::new(String::new()),
+            config,
+        });
+        let response = session
+            .request(
+                "initialize",
+                json!({
+                    "protocolVersion": PROTOCOL_VERSION,
+                    "capabilities": {},
+                    "clientInfo": { "name": "pi-desktop", "version": env!("CARGO_PKG_VERSION") },
+                }),
+                Duration::from_secs(HANDSHAKE_TIMEOUT_SECS),
+            )
+            .await?;
+        session.set_handshake(
+            response["serverInfo"].clone(),
+            response["protocolVersion"]
+                .as_str()
+                .unwrap_or(PROTOCOL_VERSION)
+                .to_owned(),
+        );
+        Ok(session)
+    }
+
+    fn take_id(&self) -> u64 {
+        self.next_id.fetch_add(1, Ordering::SeqCst)
+    }
+
+    /// 发送请求并等待对应 id 的响应。
+    pub async fn request(&self, method: &str, params: Value, timeout: Duration) -> Result<Value> {
+        let id = self.take_id();
+        let (tx, rx) = oneshot::channel();
+        self.pending.lock().unwrap().insert(id, tx);
+        let payload = json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params });
+        let sent = if self.transport == "stdio" {
+            self.write_stdio(&payload).await
+        } else {
+            self.post_http(&payload, timeout).await
+        };
+        if let Err(error) = sent {
+            self.pending.lock().unwrap().remove(&id);
+            return Err(error);
+        }
+        match tokio::time::timeout(timeout, rx).await {
+            Ok(Ok(message)) => {
+                if let Some(error) = message.get("error") {
+                    bail!("{}：{}", method, truncate(&error.to_string(), 400));
+                }
+                Ok(message["result"].clone())
+            }
+            Ok(Err(_)) => bail!("{method} 的连接已断开{}", self.stderr_suffix()),
+            Err(_) => {
+                self.pending.lock().unwrap().remove(&id);
+                bail!(
+                    "{method} 超时（{} 秒）{}",
+                    timeout.as_secs(),
+                    self.stderr_suffix()
+                )
+            }
+        }
+    }
+
+    async fn write_stdio(&self, payload: &Value) -> Result<()> {
+        let mut guard = self.stdin.lock().await;
+        let stdin = guard.as_mut().context("连接已关闭")?;
+        let mut line = serde_json::to_vec(payload)?;
+        line.push(b'\n');
+        stdin.write_all(&line).await.context("写入子进程失败")?;
+        stdin.flush().await.context("刷新子进程输入失败")?;
+        Ok(())
+    }
+
+    /// HTTP 传输：一次请求一次 curl，响应直接派发给等待者。
+    async fn post_http(&self, payload: &Value, timeout: Duration) -> Result<()> {
+        let url = self.config.url.clone().context("缺少 url")?;
+        let body = serde_json::to_string(payload)?;
+        let mut command = Command::new(crate::update::curl_exe());
+        command
+            .args(["--location", "--silent", "--show-error", "--max-time"])
+            .arg(timeout.as_secs().to_string())
+            .args(["-H", "content-type: application/json"])
+            .args(["-H", "accept: application/json, text/event-stream"])
+            .args(["--data-binary", &body])
+            .arg(&url)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        for (key, value) in &self.config.headers {
+            command.args(["-H", &format!("{key}: {value}")]);
+        }
+        hide_console(&mut command);
+        let output = command.output().await.context("无法启动 curl.exe")?;
+        if !output.status.success() {
+            bail!(
+                "HTTP 请求失败：{}",
+                truncate(String::from_utf8_lossy(&output.stderr).trim(), 300)
+            );
+        }
+        let text = String::from_utf8_lossy(&output.stdout);
+        // 兼容 application/json 与 SSE（data: {...}）两种响应。
+        let message = text
+            .lines()
+            .filter_map(|line| {
+                let line = line.trim();
+                let candidate = line.strip_prefix("data:").unwrap_or(line).trim();
+                if candidate.is_empty() || !candidate.starts_with('{') {
+                    return None;
+                }
+                serde_json::from_str::<Value>(candidate).ok()
+            })
+            .next()
+            .with_context(|| format!("HTTP 响应不是 JSON-RPC：{}", truncate(text.trim(), 200)))?;
+        if let Some(id) = message.get("id").and_then(|value| value.as_u64()) {
+            if let Some(waiter) = self.pending.lock().unwrap().remove(&id) {
+                let _ = waiter.send(message);
+            }
+        }
+        Ok(())
+    }
+
+    async fn notify(&self, method: &str, params: Value) {
+        if self.transport != "stdio" {
+            return;
+        }
+        let payload = json!({ "jsonrpc": "2.0", "method": method, "params": params });
+        let _ = self.write_stdio(&payload).await;
+    }
+
+    fn stderr_suffix(&self) -> String {
+        let text = self
+            .stderr
+            .lock()
+            .map(|value| value.clone())
+            .unwrap_or_default();
+        let text = text.trim();
+        if text.is_empty() {
+            String::new()
+        } else {
+            format!("；stderr: {}", truncate(text, 300))
+        }
+    }
+
+    /// 发现工具；refresh 为 false 时使用缓存。
+    pub async fn list_tools(&self, refresh: bool) -> Result<Vec<Value>> {
+        if !refresh {
+            let cached = self.tools.lock().await;
+            if !cached.is_empty() {
+                return Ok(cached.clone());
+            }
+        }
+        let result = self
+            .request("tools/list", json!({}), self.config.tool_timeout())
+            .await?;
+        let tools: Vec<Value> = result
+            .get("tools")
+            .and_then(|value| value.as_array())
+            .map(|values| values.iter().map(project_tool).collect())
+            .unwrap_or_default();
+        *self.tools.lock().await = tools.clone();
+        Ok(tools)
+    }
+
+    /// 调用工具。isError 结果原样返回给调用方判断，不在这里抛错。
+    pub async fn call_tool(&self, tool: &str, arguments: Value) -> Result<Value> {
+        let result = self
+            .request(
+                "tools/call",
+                json!({ "name": tool, "arguments": arguments }),
+                self.config.tool_timeout(),
+            )
+            .await?;
+        Ok(bound_result(result))
+    }
+
+    /// 关闭连接并等待子进程退出。
+    pub async fn shutdown(&self) {
+        if self.transport != "stdio" {
+            return;
+        }
+        {
+            let mut guard = self.stdin.lock().await;
+            guard.take();
+        }
+        let mut guard = self.child.lock().await;
+        if let Some(child) = guard.as_mut() {
+            let _ = child.start_kill();
+            let _ = tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
+        }
+        guard.take();
+    }
+
+    /// 给界面用的会话摘要。
+    pub fn summary(&self) -> Value {
+        json!({
+            "name": self.name,
+            "transport": self.transport,
+            "connected": true,
+            "serverInfo": self.server_info(),
+            "protocolVersion": self.protocol(),
+            "toolCount": self.tools.try_lock().map(|value| value.len()).unwrap_or(0),
+        })
+    }
+}
+
+/// 只保留界面需要的字段，并限制长度。
+fn project_tool(tool: &Value) -> Value {
+    let schema = tool
+        .get("inputSchema")
+        .map(|value| truncate(&value.to_string(), MAX_SCHEMA))
+        .unwrap_or_else(|| "{}".to_owned());
+    let required: Vec<String> = tool
+        .get("inputSchema")
+        .and_then(|value| value.get("required"))
+        .and_then(|value| value.as_array())
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(|value| value.as_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default();
+    json!({
+        "name": tool.get("name").and_then(|value| value.as_str()).unwrap_or_default(),
+        "description": truncate(
+            tool.get("description").and_then(|value| value.as_str()).unwrap_or_default(),
+            MAX_DESCRIPTION,
+        ),
+        "required": required,
+        "inputSchema": schema,
+    })
+}
+
+fn bound_result(result: Value) -> Value {
+    let text = result.to_string();
+    if text.len() <= MAX_RESULT {
+        return result;
+    }
+    json!({
+        "content": [{ "type": "text", "text": truncate(&text, MAX_RESULT) }],
+        "isError": false,
+        "truncated": true,
+    })
+}
+
+fn truncate(value: &str, limit: usize) -> String {
+    if value.len() <= limit {
+        return value.to_owned();
+    }
+    let mut end = limit;
+    while end > 0 && !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…（已截断）", &value[..end])
+}
+
+// ---------------------------------------------------------------- 管理器
+
+/// 持有所有活动会话；命令层通过它连接、列工具、调用与断开。
+pub struct McpManager {
+    agent_dir: PathBuf,
+    sessions: AsyncMutex<HashMap<String, Arc<McpSession>>>,
+}
+
+impl McpManager {
+    pub fn new(agent_dir: PathBuf) -> Self {
+        Self {
+            agent_dir,
+            sessions: AsyncMutex::new(HashMap::new()),
+        }
+    }
+
+    /// 服务器定义 + 当前连接状态。
+    pub async fn list(&self) -> Value {
+        let mut listing = load_servers(&self.agent_dir);
+        let sessions = self.sessions.lock().await;
+        if let Some(servers) = listing["servers"].as_array_mut() {
+            for server in servers.iter_mut() {
+                let name = server["name"].as_str().unwrap_or_default().to_owned();
+                match sessions.get(&name) {
+                    Some(session) => {
+                        server["connected"] = json!(true);
+                        server["serverInfo"] = session.server_info();
+                        server["toolCount"] = json!(session
+                            .tools
+                            .try_lock()
+                            .map(|value| value.len())
+                            .unwrap_or(0));
+                    }
+                    None => {
+                        server["connected"] = json!(false);
+                        server["toolCount"] = json!(0);
+                    }
+                }
+            }
+        }
+        listing["connectedCount"] = json!(sessions.len());
+        listing
+    }
+
+    async fn session(&self, name: &str) -> Result<Arc<McpSession>> {
+        if let Some(session) = self.sessions.lock().await.get(name) {
+            return Ok(session.clone());
+        }
+        let config = find_server(&self.agent_dir, name)?;
+        let session = McpSession::connect(config).await?;
+        self.sessions
+            .lock()
+            .await
+            .insert(name.to_owned(), session.clone());
+        Ok(session)
+    }
+
+    /// 连接（已连接则复用）并返回服务器信息与工具清单。
+    pub async fn connect(&self, name: &str) -> Result<Value> {
+        let session = self.session(name).await?;
+        let tools = session.list_tools(true).await?;
+        Ok(json!({ "server": session.summary(), "tools": tools }))
+    }
+
+    pub async fn tools(&self, name: &str, refresh: bool) -> Result<Value> {
+        let session = self.session(name).await?;
+        let tools = session.list_tools(refresh).await?;
+        Ok(json!({ "server": session.summary(), "tools": tools }))
+    }
+
+    pub async fn call(&self, name: &str, tool: &str, arguments: Value) -> Result<Value> {
+        if !arguments.is_object() {
+            bail!("工具参数必须是 JSON 对象");
+        }
+        let session = self.session(name).await?;
+        let result = session.call_tool(tool, arguments).await?;
+        Ok(json!({ "server": name, "tool": tool, "result": result }))
+    }
+
+    /// 断开一个服务器（name 为 * 时全部断开）。
+    pub async fn disconnect(&self, name: &str) -> Value {
+        let removed: Vec<Arc<McpSession>> = {
+            let mut sessions = self.sessions.lock().await;
+            if name == "*" {
+                sessions.drain().map(|(_, session)| session).collect()
+            } else {
+                sessions.remove(name).into_iter().collect()
+            }
+        };
+        for session in &removed {
+            session.shutdown().await;
+        }
+        json!({ "disconnected": removed.iter().map(|s| s.name.clone()).collect::<Vec<_>>() })
+    }
+
+    pub async fn shutdown(&self) {
+        let _ = self.disconnect("*").await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn env_expansion_reports_missing_names_once() {
+        let mut missing = Vec::new();
+        assert_eq!(expand_env("Bearer abc", &mut missing), "Bearer abc");
+        assert!(missing.is_empty());
+
+        std::env::set_var("PI_MCP_TEST_TOKEN", "s3cret");
+        let mut missing = Vec::new();
+        assert_eq!(
+            expand_env("Bearer ${PI_MCP_TEST_TOKEN}", &mut missing),
+            "Bearer s3cret"
+        );
+        assert!(missing.is_empty());
+
+        let mut missing = Vec::new();
+        assert_eq!(
+            expand_env("${PI_MCP_NOT_SET}-${PI_MCP_NOT_SET}", &mut missing),
+            "${PI_MCP_NOT_SET}-${PI_MCP_NOT_SET}"
+        );
+        assert_eq!(missing, vec!["PI_MCP_NOT_SET"]);
+        // 未闭合的花括号按普通文本处理
+        let mut missing = Vec::new();
+        assert_eq!(expand_env("a${b", &mut missing), "a${b");
+        assert!(missing.is_empty());
+    }
+
+    #[test]
+    fn load_servers_reads_stdio_and_http_definitions() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("mcp.json"),
+            serde_json::to_vec(&json!({
+                "mcpServers": {
+                    "local": { "command": "node", "args": ["server.mjs"], "env": { "A": "1" }, "timeout": 120 },
+                    "remote": { "url": "http://127.0.0.1:9000/mcp", "headers": { "Authorization": "Bearer x" } },
+                    "broken": { "exposure": "deferred" },
+                    "off": { "command": "node", "enabled": false }
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let listing = load_servers(dir.path());
+        let servers = listing["servers"].as_array().unwrap();
+        assert_eq!(servers.len(), 4);
+        assert_eq!(servers[0]["name"], "broken");
+        assert_eq!(servers[0]["transport"], "invalid");
+        assert!(listing["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning
+                .as_str()
+                .unwrap_or_default()
+                .contains("既没有 command 也没有 url")));
+        let local = servers.iter().find(|s| s["name"] == "local").unwrap();
+        assert_eq!(local["transport"], "stdio");
+        assert_eq!(local["timeout"], 120);
+        assert_eq!(local["envKeys"][0], "A");
+        let remote = servers.iter().find(|s| s["name"] == "remote").unwrap();
+        assert_eq!(remote["transport"], "http");
+        assert_eq!(remote["headerKeys"][0], "Authorization");
+        assert_eq!(remote["enabled"], true);
+        let off = servers.iter().find(|s| s["name"] == "off").unwrap();
+        assert_eq!(off["enabled"], false);
+    }
+
+    #[test]
+    fn load_servers_tolerates_missing_or_broken_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let listing = load_servers(dir.path());
+        assert_eq!(listing["exists"], false);
+        assert_eq!(listing["servers"].as_array().unwrap().len(), 0);
+
+        fs::write(dir.path().join("mcp.json"), b"not json").unwrap();
+        let listing = load_servers(dir.path());
+        assert_eq!(listing["exists"], true);
+        assert!(listing["warnings"][0]
+            .as_str()
+            .unwrap()
+            .contains("不是合法 JSON"));
+
+        fs::write(dir.path().join("mcp.json"), b"{}").unwrap();
+        let listing = load_servers(dir.path());
+        assert!(listing["warnings"][0]
+            .as_str()
+            .unwrap()
+            .contains("mcpServers"));
+    }
+
+    #[test]
+    fn find_server_expands_env_and_rejects_unknown_names() {
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("PI_MCP_TEST_HEADER", "token-1");
+        fs::write(
+            dir.path().join("mcp.json"),
+            serde_json::to_vec(&json!({
+                "mcpServers": {
+                    "remote": { "url": "http://x/mcp", "headers": { "Authorization": "Bearer ${PI_MCP_TEST_HEADER}" } }
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let config = find_server(dir.path(), "remote").unwrap();
+        assert_eq!(config.transport(), "http");
+        assert_eq!(
+            config.headers.get("Authorization").map(String::as_str),
+            Some("Bearer token-1")
+        );
+        assert!(find_server(dir.path(), "nope").is_err());
+        std::env::remove_var("PI_MCP_TEST_HEADER");
+    }
+
+    #[test]
+    fn tool_projection_truncates_and_keeps_required() {
+        let tool = json!({
+            "name": "search",
+            "description": "x".repeat(1000),
+            "inputSchema": { "type": "object", "required": ["q"], "properties": { "q": { "type": "string" } } }
+        });
+        let projected = project_tool(&tool);
+        assert_eq!(projected["name"], "search");
+        assert!(projected["description"].as_str().unwrap().len() < 1000);
+        assert_eq!(projected["required"][0], "q");
+        assert!(projected["inputSchema"]
+            .as_str()
+            .unwrap()
+            .contains("\"object\""));
+    }
+
+    #[test]
+    fn oversized_results_are_bounded() {
+        let result =
+            json!({ "content": [{ "type": "text", "text": "y".repeat(MAX_RESULT + 1000) }] });
+        let bounded = bound_result(result);
+        assert_eq!(bounded["truncated"], true);
+        assert!(bounded.to_string().len() < MAX_RESULT + 2000);
+    }
+
+    #[tokio::test]
+    async fn list_reports_disconnected_servers() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("mcp.json"),
+            serde_json::to_vec(&json!({ "mcpServers": { "local": { "command": "node" } } }))
+                .unwrap(),
+        )
+        .unwrap();
+        let manager = McpManager::new(dir.path().to_path_buf());
+        let listing = manager.list().await;
+        assert_eq!(listing["connectedCount"], 0);
+        assert_eq!(listing["servers"][0]["connected"], false);
+        assert_eq!(listing["servers"][0]["toolCount"], 0);
+        assert!(manager.connect("missing").await.is_err());
+    }
+}

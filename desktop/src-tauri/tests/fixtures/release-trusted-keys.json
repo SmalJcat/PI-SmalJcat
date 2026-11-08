@@ -1,0 +1,9 @@
+{
+  "keys": [
+    {
+      "keyId": "release-fixture",
+      "algorithm": "ed25519",
+      "publicKey": "hN2DufQi7BILcPdDcmfMEC+blrxWt2GsQE/Brr+6K1E="
+    }
+  ]
+}

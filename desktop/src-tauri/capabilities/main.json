@@ -3,5 +3,10 @@
   "identifier": "main",
   "description": "Only the local main window can listen to native drops and drag its titlebar. File/process APIs stay in validated Rust commands.",
   "windows": ["main"],
-  "permissions": ["core:event:allow-listen", "core:event:allow-unlisten", "core:window:allow-start-dragging"]
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:window:allow-start-dragging",
+    "notification:default"
+  ]
 }

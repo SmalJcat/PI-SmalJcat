@@ -37,7 +37,7 @@ if ($Child) {
 $taskName = 'PiDesktop-WebView2-' + [guid]::NewGuid().ToString('N')
 $log = Join-Path $env:TEMP ($taskName + '.log')
 $scriptPath = $PSCommandPath
-$powershell = (Get-Command powershell.exe -ErrorAction Stop).Source
+$testShell = (Get-Command pwsh.exe -ErrorAction Stop).Source
 $service = New-Object -ComObject Schedule.Service
 $service.Connect()
 $folder = $service.GetFolder([string][char]92)
@@ -50,8 +50,8 @@ $definition.Settings.ExecutionTimeLimit = 'PT8M'
 $definition.Settings.DisallowStartIfOnBatteries = $false
 $definition.Settings.StopIfGoingOnBatteries = $false
 $action = $definition.Actions.Create(0)
-$action.Path = $powershell
-$action.Arguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $scriptPath + '" -Child -Mode ' + $Mode + ' -LogPath "' + $log + '"'
+$action.Path = $testShell
+$action.Arguments = '-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $scriptPath + '" -Child -Mode ' + $Mode + ' -LogPath "' + $log + '"'
 $registered = $false
 $completed = $false
 try {

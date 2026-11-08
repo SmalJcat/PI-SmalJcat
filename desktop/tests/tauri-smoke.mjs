@@ -104,6 +104,69 @@ try {
     await page.getByText('这是工具输出。', { exact: false }).waitFor();
     await page.screenshot({ path: path.join(artifacts, 'tauri-chat-test.png') });
     checks.push('中文输入、Rust RPC 流式回复、工具详情、安全 Markdown');
+    // 会话正文检索：标题过滤之外，正文命中也应当出现在侧栏
+    const searchBox = page.getByLabel('搜索会话');
+    // 刻意等到索引"陈旧"（阈值 3 秒）再搜：验证搜索会自己增量同步，而不是靠手点刷新
+    await page.waitForTimeout(3500);
+    await searchBox.fill('中文流式输出');
+    await page.locator('.content-hits').waitFor();
+    await page.locator('.content-hit').first().waitFor({ timeout: 25000 });
+    assert.ok(await page.locator('.content-age').count() === 1, '应当显示索引新鲜度');
+    const hitText = (await page.locator('.content-hit').first().textContent()) || '';
+    assert.ok(hitText.includes('中文流式输出'), '正文命中应当带出片段，实际 ' + hitText);
+    // 过滤：切到「今天」+「仅当前工作区」后仍然能命中（这条会话就是刚写的）
+    const hitFilters = page.getByRole('group', { name: '检索过滤' });
+    await hitFilters.getByRole('button', { name: '今天', exact: true }).click();
+    await hitFilters.getByRole('button', { name: '仅当前工作区', exact: true }).click();
+    await page.locator('.content-hit').first().waitFor({ timeout: 15000 });
+    assert.equal(await page.locator('.content-hit').count(), 1, '过滤后应当仍然命中该会话');
+    // 多关键词：两个词都命中才算命中
+    await searchBox.fill('中文流式输出 正在查看项目');
+    await page.locator('.content-hit').first().waitFor({ timeout: 15000 });
+    await searchBox.fill('中文流式输出 完全不存在的词');
+    await page.waitForTimeout(1200);
+    assert.equal(await page.locator('.content-hit').count(), 0, '多关键词必须全部命中');
+    checks.push('多关键词 AND、时间与工作区过滤');
+    // 命中位置跳转：点开命中项应当滚动并高亮到那句话
+    await searchBox.fill('中文流式输出');
+    await page.locator('.content-hit').first().waitFor({ timeout: 15000 });
+    await page.locator('.content-hit').first().click();
+    await page.locator('.message.hit-flash').first().waitFor({ timeout: 20000 });
+    const flashedText = (await page.locator('.message.hit-flash').first().textContent()) || '';
+    assert.ok(flashedText.includes('中文流式输出'), '应当高亮到包含关键词的那条消息，实际 ' + flashedText.slice(0, 60));
+    checks.push('命中位置跳转：滚动并高亮到那句话');
+    // 命中导航条：第 N / M 处、上一个/下一个、可关闭
+    await page.locator('.locate-bar').waitFor({ timeout: 10000 });
+    const barText = (await page.locator('.locate-bar').textContent()) || '';
+    assert.match(barText, /第 \d+ \/ \d+ 处/, '导航条应当显示命中位置，实际 ' + barText);
+    await page.getByRole('button', { name: '下一个命中', exact: true }).click();
+    await page.locator('.message.hit-flash').first().waitFor({ timeout: 5000 });
+    await page.getByRole('button', { name: '上一个命中', exact: true }).click();
+    await page.locator('.message.hit-flash').first().waitFor({ timeout: 5000 });
+    await page.getByRole('button', { name: '关闭命中导航', exact: true }).click();
+    await page.locator('.locate-bar').waitFor({ state: 'detached' });
+    checks.push('命中导航：上一个/下一个与关闭');
+    // 复位过滤与查询，避免影响后续断言
+    await searchBox.fill('中文流式输出');
+    await hitFilters.getByRole('button', { name: '全部', exact: true }).click();
+    await hitFilters.getByRole('button', { name: '仅当前工作区', exact: true }).click();
+    await searchBox.fill('');
+    await page.locator('.content-hits').waitFor({ state: 'detached' });
+    checks.push('会话正文全文检索（含中文子串与片段）');
+    // 启动耗时：必须有真实数字，且阶段时间单调不减（把耗时写进验收项名称，作为留档证据）
+    const startup = await page.evaluate(() => window.pi.startupTrace());
+    const stages = startup?.stages || [];
+    assert.ok(stages.length >= 4, '启动阶段应当被记录，实际 ' + stages.length + ' 段');
+    assert.ok(stages.some(stage => stage.name === '命令通道'), '应当记录 WebView 与 Rust 建立通道的时刻');
+    assert.ok(stages.some(stage => stage.name === '前端就绪'), '应当记录前端首帧时刻');
+    let previousAt = 0;
+    for (const stage of stages) {
+      assert.ok(stage.atMs >= previousAt, '阶段累计时间应当单调不减');
+      previousAt = stage.atMs;
+    }
+    assert.ok(startup.totalMs > 0 && startup.totalMs < 30000, '启动总耗时应当在合理区间：' + startup.totalMs);
+    const breakdown = stages.map(stage => stage.name + ' ' + stage.atMs).join(' · ');
+    checks.push('启动耗时（总计 ' + startup.totalMs + 'ms｜' + breakdown + '）');
     await page.getByLabel('选择模型', { exact: true }).selectOption('fixture::fixture-fast');
     await page.waitForFunction(() => document.querySelector('select[aria-label="思考强度"]').value === 'off');
     await page.getByLabel('选择模型', { exact: true }).selectOption('fixture::fixture-model');
@@ -167,6 +230,82 @@ try {
     const reconnectSession = (await page.evaluate(() => window.pi.snapshot())).state.sessionFile;
     await page.getByRole('button', { name: /设置与连接/ }).click();
     await page.getByRole('dialog', { name: '设置与连接', exact: true }).waitFor();
+    // 外观分区的每一项都必须真的改到根元素上的变量，而不是摆设开关
+    const nav = page.locator('.settings-nav');
+    await nav.getByRole('button', { name: '外观', exact: true }).click();
+    const preferenceRows = await page.locator('.pref-row').count();
+    assert.equal(preferenceRows, 9, '外观分区应有 9 项，实际 ' + preferenceRows);
+    const rootVar = name => page.evaluate(key => getComputedStyle(document.documentElement).getPropertyValue(key).trim(), name);
+    assert.equal(await rootVar('--type-scale'), '1', '初始字号缩放应为 1');
+    await page.locator('.pref-row', { hasText: '字号' }).getByRole('button', { name: '大', exact: true }).click();
+    assert.equal(await rootVar('--type-scale'), '1.14', '字号应当真的生效');
+    await page.locator('.pref-row', { hasText: '对话宽度' }).getByRole('button', { name: '窄', exact: true }).click();
+    assert.equal(await rootVar('--chat-width'), '640px', '对话宽度应当真的生效');
+    await page.locator('.pref-row', { hasText: '圆角' }).getByRole('button', { name: '圆润', exact: true }).click();
+    assert.equal(await rootVar('--radius-scale'), '1.4', '圆角应当真的生效');
+    await page.locator('.pref-row', { hasText: '动效' }).getByRole('button', { name: '关闭', exact: true }).click();
+    assert.equal(await page.evaluate(() => document.documentElement.dataset.motion), 'off', '动效应当真的关闭');
+    await page.locator('.pref-row', { hasText: '行高' }).getByRole('button', { name: '宽松', exact: true }).click();
+    assert.equal(await rootVar('--reading-line'), '1.9', '行高应当真的生效');
+    // 复位，避免影响后续断言
+    await page.locator('.pref-row', { hasText: '字号' }).getByRole('button', { name: '标准', exact: true }).click();
+    await page.locator('.pref-row', { hasText: '对话宽度' }).getByRole('button', { name: '标准', exact: true }).click();
+    await page.locator('.pref-row', { hasText: '圆角' }).getByRole('button', { name: '标准', exact: true }).click();
+    await page.locator('.pref-row', { hasText: '动效' }).getByRole('button', { name: '完整', exact: true }).click();
+    await page.locator('.pref-row', { hasText: '行高' }).getByRole('button', { name: '标准', exact: true }).click();
+    assert.equal(await rootVar('--type-scale') + '/' + await rootVar('--radius-scale'), '1/1', '复位应当生效');
+    // 系统分区：三项由 Rust 落地，这里验证读取与渲染
+    await nav.getByRole('button', { name: '系统', exact: true }).click();
+    assert.equal(await page.locator('.pref-row').count(), 3, '系统分区应有 3 项');
+    // 快捷键：录制能改写绑定，关闭对话框后真的生效，恢复默认也有效
+    await nav.getByRole('button', { name: '快捷键', exact: true }).click();
+    assert.equal(await page.locator('.pref-row').count(), 7, '快捷键分区应有 7 项');
+    const sidebarRow = page.locator('.pref-row', { hasText: '切换左栏' });
+    await sidebarRow.getByRole('button', { name: '录制', exact: true }).click();
+    await page.keyboard.press('Control+J');
+    assert.equal((await sidebarRow.locator('kbd').textContent()).trim(), 'Ctrl+J', '录制应当改写绑定');
+    await page.getByRole('button', { name: '关闭设置', exact: true }).click();
+    const sidebarBefore = await page.locator('.sidebar').isVisible();
+    await page.keyboard.press('Control+J');
+    assert.notEqual(await page.locator('.sidebar').isVisible(), sidebarBefore, '自定义快捷键应当真的切换左栏');
+    await page.keyboard.press('Control+J');
+    assert.equal(await page.locator('.sidebar').isVisible(), sidebarBefore, '再按一次应当切回');
+    await page.getByRole('button', { name: '设置与连接' }).click();
+    await page.locator('.settings-nav').getByRole('button', { name: '快捷键', exact: true }).click();
+    await page.getByRole('button', { name: '恢复默认快捷键', exact: true }).click();
+    assert.equal(
+      (await page.locator('.pref-row', { hasText: '切换左栏' }).locator('kbd').textContent()).trim(),
+      'Ctrl+B',
+      '恢复默认应当写回默认值'
+    );
+    // 存储面板：四行用量 + 数值可读
+    await nav.getByRole('button', { name: '存储', exact: true }).click();
+    assert.equal(await page.locator('.pref-row').count(), 5, '存储分区应有 5 行（含归档保留期）');
+    const sizeText = (await page.locator('.storage-size').first().textContent()) || '';
+    assert.ok(/\d/.test(sizeText), '存储用量应当有数值，实际 ' + sizeText);
+    // 保留策略：切换档位要真的落库（读回是一致的），且全新环境下不应有可清理的记录
+    const retention = page.getByLabel('归档保留期');
+    assert.equal(await retention.inputValue(), '0', '默认应为永久保留');
+    await retention.selectOption('90');
+    await page.waitForFunction(() => document.querySelector('select[aria-label="归档保留期"]').value === '90');
+    const retentionState = await page.evaluate(() => window.pi.retentionStatus());
+    assert.equal(retentionState.retentionDays, 90, '保留期应当写入偏好');
+    assert.equal(retentionState.records, 0, '全新环境不应有过期归档记录');
+    assert.equal(retentionState.updateCacheFiles, 0, '全新环境不应有更新缓存');
+    await retention.selectOption('0');
+    await page.waitForFunction(() => document.querySelector('select[aria-label="归档保留期"]').value === '0');
+    checks.push('保留策略：档位落库、过期候选只清理可再生的东西');
+    await nav.getByRole('button', { name: '连接', exact: true }).click();
+    checks.push('外观 9 项偏好真实生效、系统分区可读');
+    checks.push('存储用量面板可用');
+    checks.push('快捷键录制、真实生效与恢复默认');
+    // 崩溃诊断：全新环境应判定为"上次正常退出"，并给出本地报告目录（前端错误数只记录不硬断言）
+    const crash = await page.evaluate(() => window.pi.crashStatus());
+    assert.equal(crash.cleanExit, true, '全新环境不应判定为异常退出');
+    assert.equal(crash.crashCount, 0, '全新环境不应有崩溃报告');
+    assert.ok(String(crash.dir).includes('crashes'), '应当给出报告目录，实际 ' + crash.dir);
+    assert.ok((await page.getByText('上次正常退出', { exact: false }).count()) >= 1, '界面应当显示上次退出状态');
+    checks.push('崩溃诊断：上次退出干净、崩溃 ' + crash.crashCount + ' 份、前端错误 ' + crash.rendererCount + ' 条');
     await page.getByText('连接诊断', { exact: true }).click();
     await page.getByText('Rust + Tauri', { exact: false }).waitFor();
     await page.screenshot({ path: path.join(artifacts, 'tauri-settings-test.png') });
@@ -365,6 +504,13 @@ try {
   assert.equal(child.exitCode, 0);
   await waitForProcessExit(piPid);
   checks.push('窗口正常退出且所属 Pi 进程已结束');
+  // 崩溃诊断：正常退出必须在数据目录留下标记（下一次启动据此区分"异常退出"）
+  // 注意：这一步必须在 finally 删除临时目录之前做，否则证据会一起被删掉
+  const exitMarkerPath = path.join(temp, 'profile', 'last-exit.json');
+  const exitMarker = JSON.parse(await readFile(exitMarkerPath, 'utf8'));
+  assert.equal(exitMarker.clean, true, '退出标记应标记为正常退出：' + exitMarkerPath);
+  assert.ok(exitMarker.at > 0, '退出标记应带时间戳');
+  checks.push('崩溃诊断：正常退出标记已落盘');
   await writeFile(resultFile, JSON.stringify({ success: true, mode, version, completedAt: new Date().toISOString(), executable, executableSha256, passed: checks, rendererErrors: errors, modelRequests: 0, ...details }, null, 2) + '\n');
   console.log('Tauri closed cleanly.');
 } catch (error) {

@@ -1,7 +1,8 @@
-import { useEffect, useState, isValidElement, type ReactNode } from 'react';
+import { useEffect, useRef, useState, isValidElement, type ReactNode } from 'react';
+import { toolCardsDefaultOpen } from './preferences.mjs';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Check, ChevronRight, Copy, FileCode2, Folder, LoaderCircle, Terminal, X, CircleAlert, Brain, CheckCheck } from 'lucide-react';
+import { Check, ChevronRight, Copy, FileCode2, Folder, LoaderCircle, Terminal, X, CircleAlert, Brain, CheckCheck } from './icons';
 import type { FileEntry, Wire } from './types';
 import { textContent } from './transcript.mjs';
 import { CodeBlock } from './ReviewPanel';
@@ -43,11 +44,14 @@ export function RichText({ text }: { text: string }) {
   }}>{text}</Markdown></div>;
 }
 export function ToolCard({ call, tool }: { call: Wire; tool?: Wire }) {
+  const card = useRef<HTMLDetailsElement>(null);
+  // 只在挂载时设置一次默认展开状态：受控 open 会与浏览器自身的 toggle 打架（挂载时的 toggle 会把卡片关掉）
+  useEffect(() => { const node = card.current; if (node) node.open = toolCardsDefaultOpen(); }, []);
   const args = tool?.args || call.arguments || {};
   const target = args.path || args.command || args.pattern || args.query || '';
   const output = textContent(tool?.result?.content);
   const done = tool?.status === 'done', error = tool?.status === 'error';
-  return <details className={`tool-card ${error ? 'tool-error' : ''}`}><summary><span className="tool-icon">{error ? <CircleAlert size={15} /> : done ? <CheckCheck size={15} /> : tool?.status === 'running' ? <LoaderCircle size={15} className="spin" /> : <Terminal size={15} />}</span><span className="tool-name">{call.name || tool?.name}</span><span className="tool-target">{String(target).slice(0, 100)}</span><span className="tool-duration">{tool?.durationMs !== undefined ? `${(tool.durationMs / 1000).toFixed(1)}s` : ''}</span><ChevronRight className="disclosure" size={14} /></summary><div className="tool-body"><label>参数</label><pre>{JSON.stringify(args, null, 2)}</pre>{output && <><label>输出</label><pre>{output.slice(0, 40000)}{output.length > 40000 ? '\n…界面截取前 40,000 字符，完整结果已保存在会话中。' : ''}</pre></>}{!output && <p className="muted">{tool?.status === 'running' ? '正在执行…' : done ? '执行完成' : '等待执行结果'}</p>}</div></details>;
+  return <details className={`tool-card ${error ? 'tool-error' : ''}`} ref={card}><summary><span className="tool-icon">{error ? <CircleAlert size={15} /> : done ? <CheckCheck size={15} /> : tool?.status === 'running' ? <LoaderCircle size={15} className="spin" /> : <Terminal size={15} />}</span><span className="tool-name">{call.name || tool?.name}</span><span className="tool-target">{String(target).slice(0, 100)}</span><span className="tool-duration">{tool?.durationMs !== undefined ? `${(tool.durationMs / 1000).toFixed(1)}s` : ''}</span><ChevronRight className="disclosure" size={14} /></summary><div className="tool-body"><label>参数</label><pre>{JSON.stringify(args, null, 2)}</pre>{output && <><label>输出</label><pre>{output.slice(0, 40000)}{output.length > 40000 ? '\n…界面截取前 40,000 字符，完整结果已保存在会话中。' : ''}</pre></>}{!output && <p className="muted">{tool?.status === 'running' ? '正在执行…' : done ? '执行完成' : '等待执行结果'}</p>}</div></details>;
 }
 export function Message({ message, tools }: { message: Wire; tools: Record<string, Wire> }) {
   if (message.role === 'system' || message.role === 'toolResult' || message.display === false) return null;
