@@ -8,7 +8,13 @@
 - JavaScript 102 项、Rust 132 项通过（1 项本机 MCP 测试跳过）；TypeScript/Vite、严格 Clippy 与格式检查通过。真实 WebView2 + 模拟 Pi 验收 48 项通过，渲染错误 0，模型调用 0。
 - 已查看正常及窄窗口截图：`artifacts/v053-composer-popup.png`、`v053-composer-models-small.png`，输入栏近景为 `v053-composer-detail.png`。Electron 历史验收脚本同步改用新模型控件，未额外运行 Electron 全套验收。
 
-正式程序交付信息在打包后追加。
+正式程序交付（09:54 HKT）：
+
+- release 构建成功，源提交 `6d46c565866873dded317279c14905871ca69686`，构建时工作区干净。
+- 程序 16,673,792 字节；SHA-256：`b1a96233a05cc467f52f264296e3e374707d0ca794d228c44086af14897e2307`。
+- 已同步到 `%LOCALAPPDATA%\Programs\Pi Desktop\fdea6c4` 与 `D:\PI\desktop\release\tauri`；ProductVersion 和 SHA-256 均核对一致，Windows 桌面快捷方式仍指向已更新的安装目录。
+- 安装目录旧版备份：`fdea6c4.backup-2026-11-08T01-54-13-405Z-9955ec79`；D:\PI 旧版备份：`tauri.backup-2026-11-08T01-54-13-853Z-dcc209a7`。
+- 本轮未重跑正式版真实 Pi 启动检查或生成 NSIS 安装器；用户原有窗口保持运行，退出并重新打开后加载新版。48 项桌面验收针对隔离测试构建，模型请求为零。
 
 ## 0.5.2 长输出与原生模型菜单（2026-11-08）
 
