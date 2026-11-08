@@ -105,15 +105,15 @@ export function McpToolsPanel({ onError }: { onError: (error: unknown) => void }
   return (
     <section className="update-card mcp-tools-card">
       <div className="update-head">
-        <strong>MCP 连接（桌面）</strong>
+        <strong>桌面工具调试</strong>
         <span className={`update-chip ${servers.some(server => server.connected) ? 'ok' : 'idle'}`}>
           {servers.filter(server => server.connected).length}/{servers.length} 已连接
         </span>
       </div>
       <p className="setting-help">
-        桌面端按 MCP 协议直接连接 mcp.json 里的服务器，读取结构化工具清单并可以调用；不改变 Pi 自己的 MCP 状态。
+        独立连接，不影响 Pi 会话
       </p>
-      {listing.path && <p className="setting-help">配置：<code>{listing.path}</code></p>}
+      {listing.path && <details className="diagnostics"><summary>配置位置</summary><code>{listing.path}</code></details>}
       {(listing.warnings || []).length > 0 && (
         <ul className="mcp-warnings">
           {(listing.warnings || []).map((warning: string) => <li key={warning}>{warning}</li>)}

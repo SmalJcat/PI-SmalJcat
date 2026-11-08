@@ -3,7 +3,7 @@ import { FolderOpen, RefreshCw, ShieldAlert, ShieldCheck } from './icons';
 import type { Wire } from './types';
 import { highestRisk, matchesQuery, permissionInfo, signatureLabel, sortExtensions, sortPermissions, summaryOf, verdictInfo } from './extensions.mjs';
 
-// 「扩展与签名」卡片（P1.1）：只做只读核查——不加载扩展，也不替 Pi 决定是否运行。
+// 「扩展检查」卡片（P1.1）：只做只读核查——不加载扩展，也不替 Pi 决定是否运行。
 export function ExtensionsPanel({ onError }: { onError: (error: unknown) => void }) {
   const [data, setData] = useState<Wire>({ extensions: [], trustedKeys: [], root: '' });
   const [busy, setBusy] = useState(false);
@@ -40,9 +40,9 @@ export function ExtensionsPanel({ onError }: { onError: (error: unknown) => void
           : `共 ${summary.total} 个扩展，${summary.needsAttention} 个需要确认${summary.highRisk > 0 ? `，其中 ${summary.highRisk} 个声明了高风险权限` : ''}。`}
       </p>
       {summary.needsAttention > 0 && (
-        <p className="setting-help update-hint"><ShieldAlert size={13} /> 未签名或签名不受信任的扩展不会被标记为可信；启用前请先核对来源与权限。</p>
+        <p className="setting-help update-hint"><ShieldAlert size={13} /> 仅检查，不负责加载扩展</p>
       )}
-      {data.root && <p className="setting-help">目录：<code>{data.root}</code>{data.trustedKeys?.length ? `（信任 ${data.trustedKeys.length} 个密钥：${data.trustedKeys.join('、')}）` : '（尚未配置信任密钥）'}</p>}
+      {data.root && <details className="diagnostics"><summary>目录与信任密钥</summary><code>{data.root}</code><p>{data.trustedKeys?.join('、') || '未配置信任密钥'}</p></details>}
       <div className="settings-actions update-actions">
         <button className="secondary-button" disabled={busy} onClick={() => void refresh()}>
           <RefreshCw size={14} /> 重新扫描

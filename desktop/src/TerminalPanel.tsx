@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Ban, Eraser, Play, RefreshCw, TerminalSquare } from './icons';
+import { Ban, Eraser, Play, RefreshCw } from './icons';
+import { Modal } from './components';
 import type { Wire } from './types';
 import { SHELLS, applyEvent, exitText, isBusy, runStateLabel, runTone, selectedRun, tailOutput } from './terminal.mjs';
 
@@ -66,12 +67,9 @@ export function TerminalPanel({ cwd, onClose, onError }: { cwd: string; onClose:
   }, [onError]);
 
   return (
-    <div className="modal-backdrop" onClick={event => { if (event.target === event.currentTarget) onClose(); }}>
-      <div className="modal wide terminal-modal">
-        <header>
+    <Modal title="工作区命令" wide className="terminal-modal" onClose={onClose}>
+        <div className="terminal-subhead">
           <div className="terminal-head">
-            <TerminalSquare size={16} />
-            <h2>工作区命令</h2>
             <span className="setting-help">{cwd || '未选择工作区'}</span>
           </div>
           <div className="header-actions">
@@ -81,9 +79,8 @@ export function TerminalPanel({ cwd, onClose, onError }: { cwd: string; onClose:
             <button className="secondary-button" onClick={() => void window.pi.terminalClear().then(() => setRuns([])).catch(onError)}>
               <Eraser size={14} /> 清空
             </button>
-            <button className="icon-button" aria-label="关闭" onClick={onClose}><Ban size={15} /></button>
           </div>
-        </header>
+        </div>
         <div className="terminal-body">
           <aside className="terminal-history">
             {runs.map(item => (
@@ -108,7 +105,7 @@ export function TerminalPanel({ cwd, onClose, onError }: { cwd: string; onClose:
                 value={command}
                 onChange={event => setCommand(event.target.value)}
                 onKeyDown={event => { if (event.key === 'Enter' && !running) void run(); }}
-                placeholder="在当前工作区运行命令（Enter 执行）"
+                placeholder="输入命令，Enter 运行"
                 aria-label="命令"
                 disabled={running}
               />
@@ -122,6 +119,7 @@ export function TerminalPanel({ cwd, onClose, onError }: { cwd: string; onClose:
                 <input type="checkbox" checked={follow} onChange={event => setFollow(event.target.checked)} /> 跟随输出
               </label>
             </div>
+            <div className="terminal-mode">非交互命令</div>{active && <code className="terminal-current">{active.command}</code>}
             <div className="terminal-output" ref={body}>
               <pre>{output || '（还没有输出）'}</pre>
             </div>
@@ -135,10 +133,6 @@ export function TerminalPanel({ cwd, onClose, onError }: { cwd: string; onClose:
             )}
           </section>
         </div>
-        <p className="setting-help terminal-note">
-          这是命令运行器：在当前工作区执行并流式显示输出，没有交互式标准输入。命令只能由主窗口发起，输出保留最近 20 次、每次上限 512 KB。
-        </p>
-      </div>
-    </div>
+    </Modal>
   );
 }

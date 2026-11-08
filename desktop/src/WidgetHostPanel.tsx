@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ExternalLink, RefreshCw, ShieldCheck, ShieldAlert, X } from './icons';
 import type { Wire } from './types';
-import { auditTone, formatTime, grantSummary, riskLabel, splitAuditApi } from './widgets.mjs';
+import { auditTone, formatTime, riskLabel, splitAuditApi } from './widgets.mjs';
 
 // MCP Apps 沙箱宿主（P1.2b）：宿主只暴露固定白名单，widget 在独立 WebView 里运行。
 // 本面板负责选 widget、逐项授权、开窗与查看审计；判定一律由 Rust 侧完成。
@@ -35,10 +35,8 @@ export function WidgetHostPanel({ onError }: { onError: (error: unknown) => void
 
   const apis: Wire[] = catalog.apis || [];
   const widgets: Wire[] = catalog.widgets || [];
-  const baseApis = useMemo(() => apis.filter(api => !api.extended), [apis]);
-  const extendedApis = useMemo(() => apis.filter(api => api.extended), [apis]);
-  const summary = grantSummary(grants, [], []);
-  const limits = catalog.limits || {};
+  const baseApis = useMemo(() => apis.filter(api => !api.extended && selected?.requested?.includes(api.name)), [apis, selected]);
+  const extendedApis = useMemo(() => apis.filter(api => api.extended && selected?.requested?.includes(api.name)), [apis, selected]);
 
   const pick = (widget: Wire) => {
     setSelected(widget);
@@ -88,13 +86,10 @@ export function WidgetHostPanel({ onError }: { onError: (error: unknown) => void
   return (
     <section className="update-card widget-card">
       <div className="update-head">
-        <strong>MCP Apps 沙箱</strong>
+        <strong>MCP Apps 演示</strong>
         <span className={`update-chip ${opened ? 'ok' : 'idle'}`}>{opened ? '窗口已打开' : '未打开'}</span>
       </div>
-      <p className="setting-help">
-        widget 在独立 WebView 窗口里运行，数据目录与主窗口分离；它只能调用白名单里的能力，且必须在下面逐项授权。
-        单条消息上限 {Number(limits.maxMessageBytes || 65536)} 字节，载荷上限 {Number(limits.maxPayloadBytes || 32768)} 字节。
-      </p>
+      <p className="setting-help">内置演示 · 模拟能力</p>
       <div className="settings-actions update-actions">
         <button className="secondary-button" disabled={busy} onClick={() => void loadAudit()}>
           <RefreshCw size={14} /> 刷新审计
@@ -127,9 +122,9 @@ export function WidgetHostPanel({ onError }: { onError: (error: unknown) => void
           <div className="mcp-call-head">
             <ShieldCheck size={14} />
             <strong>{selected.id}</strong>
-            <span className="setting-help">{summary.text}</span>
+            <span className="setting-help">已选 {grants.length} / {(selected.requested || []).length} 项</span>
           </div>
-          <p className="setting-help">申请：{(selected.requested || []).map((name: string) => name).join('、') || '无'}</p>
+
           <fieldset className="widget-grant-group">
             <legend>基础能力</legend>
             {baseApis.map(api => (
@@ -141,13 +136,13 @@ export function WidgetHostPanel({ onError }: { onError: (error: unknown) => void
                 />
                 <span>
                   <code>{api.name}</code>
-                  <small>{api.note} · 风险 {riskLabel(api.risk)}</small>
+                  <small title={api.note}>{riskLabel(api.risk)}风险</small>
                 </span>
               </label>
             ))}
           </fieldset>
           <fieldset className="widget-grant-group">
-            <legend>扩展能力（默认拒绝，高风险）</legend>
+            <legend>高风险能力</legend>
             {extendedApis.map(api => (
               <label key={api.name} className="widget-grant risk-high">
                 <input
@@ -164,7 +159,7 @@ export function WidgetHostPanel({ onError }: { onError: (error: unknown) => void
           </fieldset>
           {extendedApis.some(api => grants.includes(api.name)) && (
             <p className="setting-help update-hint">
-              <ShieldAlert size={13} /> 已勾选高风险能力：widget 将获得对应宿主操作。
+              <ShieldAlert size={13} /> 已选择高风险能力（演示）
             </p>
           )}
           <div className="settings-actions update-actions">

@@ -77,10 +77,7 @@ export function IndexPanel({ onError }: { onError: (error: unknown) => void }) {
         <strong>本地任务索引</strong>
         <span className="update-chip idle">{Number(stats.tasks) || 0} 条</span>
       </div>
-      <p className="setting-help">
-        任务检索走 SQLite 缓存：`{size}`，结构版本 {String(stats.schemaVersion ?? '—')}，归档 {Number(stats.archived) || 0} 条。
-        索引只是缓存——记录文件仍是权威数据，重建不会改动任务本身。上次重建：{rebuiltAt}。
-      </p>
+      <p className="setting-help">{size} · 归档 {Number(stats.archived) || 0} 条</p><details className="diagnostics"><summary>索引详情</summary><p>上次重建：{rebuiltAt} · 结构版本 {String(stats.schemaVersion ?? '—')}</p></details>
       <div className="settings-actions update-actions">
         <button className="secondary-button" disabled={Boolean(busy)} onClick={() => void rebuild()}>
           <Database size={14} /> {busy === 'rebuild' ? '正在重建…' : '重建索引'}
@@ -111,7 +108,7 @@ export function IndexPanel({ onError }: { onError: (error: unknown) => void }) {
       <div className="pref-row">
         <div className="pref-meta">
           <span className="pref-label">会话正文索引</span>
-          <span className="pref-hint">全文检索用的 FTS5 索引：{Number(sessionStats.files) || 0} 个会话 · {formatCount(Number(sessionStats.chars) || 0)} 字</span>
+          <span className="pref-hint">{Number(sessionStats.files) || 0} 个会话 · {formatCount(Number(sessionStats.chars) || 0)} 字</span>
         </div>
         <div className="shortcut-control">
           <span className="storage-size">{formatBytes(Number(sessionStats.bytes) || 0)}</span>

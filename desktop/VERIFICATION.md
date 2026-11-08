@@ -1,5 +1,16 @@
 # Pi Desktop 发布验收
 
+## 0.5.1 UI 整理（2026-11-08）
+
+本轮修复工具导航懒加载导致的布局跳变，调整首页、子代理、设置、MCP、上下文与命令面板，并精简说明文字。完整变更见 [开发记录](docs/DEVELOPMENT.md)。
+
+- JavaScript 102 项通过；Rust 132 项通过、1 项本机 MCP 测试跳过；TypeScript/Vite 构建、严格 Clippy 和格式检查通过。
+- 09:01 HKT 的真实 WebView2 + 模拟 Pi 验收：44 项通过、渲染错误 0、模型调用 0。新增检查比较冷启动与首次打开子代理/上下文后的按钮矩形，验证欢迎区与输入框距离、新建任务展开/草稿保留，以及 1024px 设置分组、MCP 范围切换和命令入口。
+- 已查看首页、新任务、任务结果、上下文与小窗口设置截图。证据：`artifacts/v051-home.png`、`v051-agent-create.png`、`v051-settings-small.png`、`v04-agents.png`、`v04-context-overview.png`；验收 JSON 和日志在 `artifacts/tauri-ui-result.json`、`v051-ui.log`、`v051-js.log`、`v051-rust.log`。
+- 测试启动时曾被用户正在运行的正式版单实例门禁拦截；现在仅对显式隔离的 fixture 进程跳过该门禁，正式程序维持单实例。新增冷启动回归随后完整通过。
+
+正式程序交付摘要将在打包及部署后追加。
+
 ## 0.5.0 本机交付（2026-11-08）
 
 本轮统一此前增量功能版本，增加发布来源记录、可回退本地部署工具与 PowerShell 7 验收入口。当前功能与已知边界见 [开发记录](docs/DEVELOPMENT.md)。

@@ -886,15 +886,24 @@ pub fn run() {
     // 因此这里的累计时间包含 Builder 与插件初始化。
     let trace = crate::trace::StartupTrace::default();
     trace.begin();
-    tauri::Builder::default()
-        .manage(trace)
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+    let builder = tauri::Builder::default().manage(trace);
+    // Fixture processes have isolated profiles and must not activate/exit into
+    // the user's running release. Production builds always remain single-instance.
+    let isolated_fixture = cfg!(feature = "test-fixture")
+        && std::env::var("PI_DESKTOP_TEST").as_deref() == Ok("1")
+        && std::env::var_os("PI_DESKTOP_USER_DATA").is_some();
+    let builder = if isolated_fixture {
+        builder
+    } else {
+        builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.unminimize();
                 let _ = window.show();
                 let _ = window.set_focus();
             }
         }))
+    };
+    builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())

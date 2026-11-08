@@ -6,7 +6,7 @@ import { PRESETS } from './ui-theme.mjs';
 import { CHAT_WIDTHS, DENSITIES, FONT_FAMILIES, FONT_SCALES, MOTIONS, RADIUS_SCALES } from './preferences.mjs';
 import { UpdatePanel } from './UpdatePanel';
 import { ExtensionsPanel } from './ExtensionsPanel';
-import { McpToolsPanel } from './McpToolsPanel';
+import { McpPanel } from './ReviewPanel';
 import { WidgetHostPanel } from './WidgetHostPanel';
 import { IndexPanel } from './IndexPanel';
 import { useEffect } from 'react';
@@ -21,17 +21,17 @@ import { formatBytes } from './format.mjs';
 // 验收用例（tests/tauri-smoke.mjs）打开设置后直接点这两项。
 type Section = 'connection' | 'appearance' | 'shortcuts' | 'system' | 'storage' | 'updates' | 'extensions' | 'mcp' | 'sandbox' | 'index';
 
-const SECTIONS: { id: Section; label: string; icon: ComponentType<{ size?: number }> }[] = [
-  { id: 'connection', label: '连接', icon: Terminal },
-  { id: 'appearance', label: '外观', icon: Settings2 },
-  { id: 'shortcuts', label: '快捷键', icon: Keyboard },
-  { id: 'system', label: '系统', icon: Zap },
-  { id: 'storage', label: '存储', icon: FolderOpen },
-  { id: 'updates', label: '更新', icon: Download },
-  { id: 'extensions', label: '扩展', icon: Layers },
-  { id: 'mcp', label: 'MCP', icon: Plug },
-  { id: 'sandbox', label: '沙箱', icon: ShieldCheck },
-  { id: 'index', label: '索引', icon: Database },
+const SECTIONS: { id: Section; label: string; group: string; icon: ComponentType<{ size?: number }> }[] = [
+  { id: 'connection', group: '常用', label: '连接', icon: Terminal },
+  { id: 'appearance', group: '常用', label: '外观', icon: Settings2 },
+  { id: 'shortcuts', group: '常用', label: '快捷键', icon: Keyboard },
+  { id: 'system', group: '常用', label: '系统', icon: Zap },
+  { id: 'storage', group: '维护', label: '存储', icon: FolderOpen },
+  { id: 'updates', group: '维护', label: '更新', icon: Download },
+  { id: 'extensions', group: '高级', label: '扩展检查', icon: Layers },
+  { id: 'mcp', group: '高级', label: 'MCP', icon: Plug },
+  { id: 'sandbox', group: '高级', label: '沙箱演示', icon: ShieldCheck },
+  { id: 'index', group: '维护', label: '索引', icon: Database },
 ];
 
 // 与主窗口一致的 ANSI 清理（诊断输出里带终端控制序列）
@@ -47,12 +47,11 @@ function Choice({ label, options, value, onChange }: {
   value: string;
   onChange: (value: string) => void;
 }) {
-  const current = options.find(option => option.id === value);
   return (
     <div className="pref-row">
       <div className="pref-meta">
         <span className="pref-label">{label}</span>
-        <span className="pref-hint">{current?.hint || current?.label || ""}</span>
+
       </div>
       <div className="pref-options" role="group" aria-label={label}>
         {options.map(option => (
@@ -60,6 +59,7 @@ function Choice({ label, options, value, onChange }: {
             key={option.id}
             type="button"
             className={option.id === value ? "pref-option active" : "pref-option"}
+            title={option.hint}
             aria-pressed={option.id === value}
             onClick={() => onChange(option.id)}
           >
@@ -229,7 +229,7 @@ export function SettingsDialog({
             <span>{appVersion}</span>
           </div>
         </div>
-        {SECTIONS.map(item => {
+        {['常用', '维护', '高级'].map(group => <div className="settings-nav-group" key={group}><h4>{group}</h4>{SECTIONS.filter(item => item.group === group).map(item => {
           const Icon = item.icon;
           return (
             <button
@@ -242,14 +242,14 @@ export function SettingsDialog({
               <span>{item.label}</span>
             </button>
           );
-        })}
+        })}</div>)}
       </aside>
 
       <section className="settings-content">
                 {section === 'appearance' && (
           <>
             <h3 className="settings-title">外观</h3>
-            <p className="setting-help">所有选项立即生效并记住；数值来源与规则见 docs/TYPOGRAPHY.md 与 docs/UI-THEME-CHATGPT.md。</p>
+
             <Choice
               label="界面风格"
               options={PRESETS.map(preset => ({ id: preset.id, label: preset.label, hint: preset.note }))}
@@ -308,12 +308,12 @@ export function SettingsDialog({
                 打开目录
               </button>
             </div>
-            <p className="setting-help">模型、登录凭据、MCP 与扩展沿用 Pi 的配置；模型与思考强度可在输入框下方切换。</p>
+
             <label className="trust-option">
               <input type="checkbox" checked={trust} onChange={event => onTrustChange(event.target.checked)} />
               <span>
                 本次连接加载当前项目的配置与扩展
-                <small>默认遵循 Pi 已保存的信任设置。勾选后以 --approve 重新连接。</small>
+                <small>重新连接后生效</small>
               </span>
             </label>
             <div className="settings-actions">
@@ -334,12 +334,13 @@ export function SettingsDialog({
                 <button className="secondary-button" onClick={loadCrash}>刷新</button>
               </div>
             </div>
-            {crash.dir && <p className="setting-help">报告目录（纯本地，不上报）：<code>{String(crash.dir)}</code></p>}
+
             {[...(crash.crashes || []), ...(crash.rendererErrors || [])].slice(0, 3).map((item: Wire) => (
               <p className="setting-help" key={String(item.name)}>{String(item.name)} · {String(item.preview || '')}</p>
             ))}
             <details className="diagnostics">
               <summary>连接诊断</summary>
+              {crash.dir && <p className="setting-help"><code>{String(crash.dir)}</code></p>}
               <pre>{JSON.stringify({ ...diagnostics, stderr: cleanAnsi(String(diagnostics.stderr || '')) }, null, 2)}</pre>
             </details>
           </>
@@ -348,7 +349,7 @@ export function SettingsDialog({
         {section === 'shortcuts' && (
           <>
             <h3 className="settings-title">快捷键</h3>
-            <p className="setting-help">点「录制」后直接按组合键；Esc 取消录制。与其它动作冲突或只按修饰键会被拒绝。</p>
+
             {conflicts.length > 0 && (
               <p className="setting-help shortcut-warning">
                 有重复绑定：{conflicts.map(item => item.combo).join('、')} —— 同一组合键会命中列表里靠前的动作。
@@ -358,7 +359,7 @@ export function SettingsDialog({
               <div className="pref-row" key={action.id}>
                 <div className="pref-meta">
                   <span className="pref-label">{action.label}</span>
-                  <span className="pref-hint">{recording === action.id ? '请按下组合键…' : action.hint}</span>
+                  {recording === action.id && <span className="pref-hint">请按组合键 · Esc 取消</span>}
                 </div>
                 <div className="shortcut-control">
                   <kbd>{shortcuts[action.id]}</kbd>
@@ -380,7 +381,7 @@ export function SettingsDialog({
         {section === 'system' && (
           <>
             <h3 className="settings-title">系统</h3>
-            <p className="setting-help">这三项由 Rust 侧落地（注册表与偏好文件），关闭应用后仍然有效。</p>
+
             <Toggle
               label="开机自启"
               hint="登录 Windows 后自动启动 Pi Desktop"
@@ -389,13 +390,13 @@ export function SettingsDialog({
             />
             <Toggle
               label="关闭时最小化到托盘"
-              hint="点关闭按钮只隐藏窗口，从托盘菜单才能真正退出；托盘图标在下次启动时创建"
+              hint="下次启动生效；从托盘菜单退出"
               value={Boolean(system.closeToTray)}
               onChange={value => applySystem('closeToTray', value)}
             />
             <Toggle
               label="任务完成通知"
-              hint="任务结束时发送系统通知（窗口在前台时不打扰）"
+              hint="仅在后台通知"
               value={Boolean(system.notifications)}
               onChange={value => applySystem('notifications', value)}
             />
@@ -418,12 +419,12 @@ export function SettingsDialog({
         {section === 'storage' && (
           <>
             <h3 className="settings-title">存储</h3>
-            <p className="setting-help">只统计应用自己管理的目录，合计 {formatBytes(Number(usage.totalBytes) || 0)}；索引中有 {Number(usage.indexedTasks) || 0} 条任务。</p>
+            <p className="setting-help">{formatBytes(Number(usage.totalBytes) || 0)} · {Number(usage.indexedTasks) || 0} 条任务</p>
             {(usage.rows || []).map((row: Wire) => (
               <div className="pref-row" key={row.id}>
                 <div className="pref-meta">
-                  <span className="pref-label">{row.label}</span>
-                  <span className="pref-hint" title={String(row.path)}>{row.note || row.path}</span>
+                  <span className="pref-label" title={String(row.path)}>{row.label}</span>
+
                 </div>
                 <div className="shortcut-control">
                   <span className="storage-size">{formatBytes(Number(row.bytes) || 0)}<small>{Number(row.files) || 0} 个文件</small></span>
@@ -435,7 +436,7 @@ export function SettingsDialog({
             <div className="pref-row">
               <div className="pref-meta">
                 <span className="pref-label">归档保留期</span>
-                <span className="pref-hint">超过保留期的「已归档任务」会列出来供清理；**会话原文永不被删除**</span>
+                <span className="pref-hint">仅清理归档记录，保留会话原文</span>
               </div>
               <div className="shortcut-control">
                 <select
@@ -476,14 +477,10 @@ export function SettingsDialog({
           </>
         )}
         {section === 'updates' && (<><h3 className="settings-title">更新</h3><UpdatePanel onError={onError} /></>)}
-        {section === 'extensions' && (<><h3 className="settings-title">扩展</h3><ExtensionsPanel onError={onError} /></>)}
-        {section === 'mcp' && (<><h3 className="settings-title">MCP</h3><McpToolsPanel onError={onError} /></>)}
-        {section === 'sandbox' && (<><h3 className="settings-title">沙箱</h3><WidgetHostPanel onError={onError} /></>)}
+        {section === 'extensions' && (<><h3 className="settings-title">扩展检查</h3><ExtensionsPanel onError={onError} /></>)}
+        {section === 'mcp' && (<><h3 className="settings-title">MCP</h3><McpPanel embedded onClose={onClose} onError={onError} /></>)}
+        {section === 'sandbox' && (<><h3 className="settings-title">沙箱演示</h3><WidgetHostPanel onError={onError} /></>)}
         {section === 'index' && (<><h3 className="settings-title">索引</h3><IndexPanel onError={onError} /></>)}
-
-        <div className="settings-footer">
-          <button className="secondary-button" onClick={onClose}>关闭设置</button>
-        </div>
       </section>
     </div>
   );

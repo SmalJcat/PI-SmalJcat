@@ -63,7 +63,7 @@ export function UpdatePanel({ onError }: { onError: (error: unknown) => void }) 
       {notice && <p className="setting-help update-notice">{notice}</p>}
       {staged && <p className="setting-help">已暂存：<code>{staged}</code></p>}
       {!status.sourceConfigured && status.phase === 'idle' && (
-        <p className="setting-help update-hint"><CircleAlert size={13} /> 尚未配置更新源：设置环境变量 <code>PI_DESKTOP_UPDATE_URL</code> 后重启，或使用本地清单检查。</p>
+        <p className="setting-help update-hint"><CircleAlert size={13} /> 未配置更新源</p>
       )}
       <div className="settings-actions update-actions">
         <button className="secondary-button" disabled={disabled || !canCheck(status)} onClick={() => void run(() => window.pi.updateCheck())}>
@@ -73,11 +73,11 @@ export function UpdatePanel({ onError }: { onError: (error: unknown) => void }) 
           <Download size={14} /> 下载并校验
         </button>
         <button className="secondary-button" disabled={disabled || !canInstall(status)} onClick={() => void run(() => window.pi.updateInstall())}>
-          <RotateCw size={14} /> 安排下次启动应用
+          <RotateCw size={14} /> 下次启动更新
         </button>
       </div>
       <details className="diagnostics update-manifest" open={localOpen} onToggle={event => setLocalOpen((event.target as HTMLDetailsElement).open)}>
-        <summary>使用本地清单检查</summary>
+        <summary>本地清单与更新源</summary><p className="setting-help">在线更新可设置 <code>PI_DESKTOP_UPDATE_URL</code> 后重启。</p>
         <textarea
           value={draft}
           onChange={event => setDraft(event.target.value)}

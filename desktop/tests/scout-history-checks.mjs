@@ -12,6 +12,7 @@ export async function scoutHistoryChecks(page, artifacts, checks, waitForValue) 
   await waitForValue(() => page.evaluate(() => window.pi.agentTasks()), value => value.active === 0 && created.every(id => value.tasks.some(task => task.id === id && task.status === 'completed')));
   await page.getByRole('button', { name: '子代理工作台', exact: true }).click();
   const panel = page.getByRole('dialog', { name: '子代理工作台', exact: true });
+  await panel.getByText('筛选', { exact: true }).click();
   const search = panel.getByLabel('搜索探子任务', { exact: true });
   await search.fill('history-page-');
   await page.waitForFunction(() => document.querySelector('.task-pagination')?.textContent.includes('21 项'));

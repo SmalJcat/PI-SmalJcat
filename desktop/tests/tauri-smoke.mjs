@@ -1,3 +1,4 @@
+import { layoutChecks } from './layout-ui.mjs';
 import { scoutHistoryChecks } from './scout-history-checks.mjs';
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
@@ -69,6 +70,7 @@ try {
   assert.equal(info.diagnostics.connected, true);
   assert.equal(await page.evaluate(() => typeof window.require), 'undefined');
   checks.push('真实 Tauri / WebView2 启动、Rust 桥接与连接');
+  if (!real) await layoutChecks(page, artifacts, checks);
   await page.screenshot({ path: path.join(artifacts, real ? 'tauri-real.png' : 'tauri-home-test.png') });
   if (real) {
     assert.ok(info.snapshot.models.length > 0); assert.ok(info.snapshot.commands.length > 0);
@@ -264,7 +266,7 @@ try {
     await sidebarRow.getByRole('button', { name: '录制', exact: true }).click();
     await page.keyboard.press('Control+J');
     assert.equal((await sidebarRow.locator('kbd').textContent()).trim(), 'Ctrl+J', '录制应当改写绑定');
-    await page.getByRole('button', { name: '关闭设置', exact: true }).click();
+    await page.getByRole('dialog', { name: '设置与连接', exact: true }).getByRole('button', { name: '关闭弹窗', exact: true }).click();
     const sidebarBefore = await page.locator('.sidebar').isVisible();
     await page.keyboard.press('Control+J');
     assert.notEqual(await page.locator('.sidebar').isVisible(), sidebarBefore, '自定义快捷键应当真的切换左栏');
@@ -387,6 +389,7 @@ try {
     checks.push('进程崩溃、被占用会话副本恢复与断线草稿');
     await page.getByRole('button', { name: '上下文管理', exact: true }).click();
     const contextPanel = page.getByRole('dialog', { name: '上下文管理', exact: true });
+    await contextPanel.getByText('参数与范围', { exact: true }).click();
     await contextPanel.getByLabel('预留 tokens', { exact: true }).fill('40000');
     await contextPanel.getByLabel('保留近期 tokens', { exact: true }).fill('10000');
     await contextPanel.getByLabel('启用自动压缩', { exact: true }).uncheck();
@@ -420,7 +423,9 @@ try {
     const waitTask = (id, status) => waitForValue(() => page.evaluate(id => window.pi.agentTasks({ action: 'detail', id }), id), task => task.status === status);
     await page.getByRole('button', { name: '子代理工作台', exact: true }).click();
     let agentsPanel = page.getByRole('dialog', { name: '子代理工作台', exact: true });
+    await agentsPanel.getByRole('button', { name: '新任务', exact: true }).click();
     await agentsPanel.getByLabel('探子任务', { exact: true }).fill('等待探子 A\n等待探子 B\n等待探子 C\n等待探子 D\n等待探子 E');
+    await agentsPanel.getByText('高级选项', { exact: true }).click();
     await agentsPanel.getByLabel('按行拆分任务', { exact: true }).check();
     await agentsPanel.getByRole('button', { name: '派发探子', exact: true }).click();
     await waitForTasks(value => value.tasks.filter(t => t.status === 'running').length === 4 && value.tasks.filter(t => t.status === 'queued').length === 1);
@@ -457,10 +462,12 @@ try {
     await waitForTasks(value => !value.tasks.some(task => task.task === '等待自动派发的只读检查' && ['queued', 'starting', 'running', 'cancelling'].includes(task.status)));
     checks.push('父任务派发响应前取消不遗留运行中的子任务');
     await page.getByRole('button', { name: '子代理工作台', exact: true }).click(); agentsPanel = page.getByRole('dialog', { name: '子代理工作台', exact: true });
+    await agentsPanel.getByRole('button', { name: '新任务', exact: true }).click();
     await agentsPanel.getByLabel('探子任务', { exact: true }).fill('[fixture-fail-agent]');
     await agentsPanel.getByRole('button', { name: '派发探子', exact: true }).click();
     await agentsPanel.getByText('fixture provider failed', { exact: true }).waitFor();
     checks.push('子代理模型错误保留错误详情');
+    await agentsPanel.getByRole('button', { name: '新任务', exact: true }).click();
     await agentsPanel.getByLabel('探子任务', { exact: true }).fill('等待重启后恢复');
     await agentsPanel.getByRole('button', { name: '派发探子', exact: true }).click();
     const runningList = await waitForTasks(value => value.tasks.some(task => task.task === '等待重启后恢复' && task.status === 'running'));
