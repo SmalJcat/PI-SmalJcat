@@ -8,6 +8,13 @@
 - 本机官方 CLI 1.5.3 的 metadata-only 集成验证通过：真实 `--dangerously-skip-permissions` 与默认模式双向切换后恢复同一会话、模型/推理。模型调用 0，没有改全局 CLI 账号或权限设置。记录：`artifacts/v061-official-metadata.log`；本轮未再次执行真实模型任务。
 - 回执/日志：`artifacts/tauri-ui-result.json`、`v061-ui.log`、`v061-js.log`、`v061-rust.log`、`v061-clippy.log`、`v061-debug-build.log`。已用 computer-use 确认原桌面窗口空闲并正常关闭，为正式版验收释放单实例。
 
+正式程序交付（15:17 HKT）：
+
+- 从干净提交 `7bb3435c3164894208cffe6c9b863f844e724d81` 构建，122 个范围内文件的源码指纹为 `72fa1433202a95673d3a5605e6db366803ffdebbd08075d4b205b8b1c1420952`。程序 17,230,848 字节；SHA-256：`375642d726605a26a17a30531bcee98c09517ca9ac0f20d746e6e7c1bf910c59`。
+- 15:16 HKT 正式程序完成 6 项真实 Pi / ACP 检查，渲染错误 0、模型请求 0。真实 CLI 双向切换完全访问/按需确认，恢复同一会话、当前模型和草稿；已查看 `artifacts/v061-official-desktop.png`，确认当前 Claude Opus 5.5 与档位在关闭浮层后仍可见，输入卡片没有重复的内层焦点边框。
+- 已同步 `%LOCALAPPDATA%\Programs\Pi Desktop\fdea6c4` 与 `D:\PI\desktop\release\tauri`，两处 ProductVersion 为 0.6.1，文件、清单和正式验收 SHA-256 一致，Windows 桌面快捷方式目标已核对。旧 0.6.0 分别保留为 `fdea6c4.backup-2026-11-08T07-17-33-061Z-42bba3f5`、`tauri.backup-2026-11-08T07-17-33-509Z-ae70a505`。
+- 日志：`artifacts/v061-package.log`、`v061-release.log`、`v061-deploy-installed.log`、`v061-deploy-runtime.log`。本轮没有生成新 NSIS 安装器或进行 Authenticode 签名；凭据、个人配置、会话与构建产物不提交 Git。
+
 ## 0.6.0 Antigravity CLI（2026-11-08）
 
 - 新增独立 ACP v1 后端、主区和受管理子进程，复用官方 CLI 的已有登录。桥接、权限、历史与当前边界见 [接入说明](docs/ANTIGRAVITY-ACP.md)。
