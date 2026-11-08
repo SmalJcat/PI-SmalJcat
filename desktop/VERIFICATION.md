@@ -8,6 +8,13 @@
 - 15:55 HKT 0.6.3 完成 56 项真实 WebView2 + fixture 验收，渲染错误 0、模型请求 0。新增在真实桌面恢复时注入模型配置拒绝，确认仍保持连接、显示 Gemini fixture / 高的实际值与简短提示，并保留对话/草稿；断开后新建绕过旧会话，旧草稿仍在。已查看 `artifacts/v063-config-warning.png`。
 - 日志：`artifacts/v063-js.log`、`v063-rust.log`、`v063-clippy.log`、`v063-debug-build.log`、`v063-ui.log`，回执 `tauri-ui-result.json`。本轮未调用真实模型。
 
+正式程序交付（16:00 HKT）：
+
+- 来自干净提交 `f47d47b31051b072f8b8f06fca2549077da0e820`；122 个文件的源码指纹 `31fd915398f3e6f4ee7ae2d52cd84fbae9ae61ffecfa4d623af5da63f8ac15ca`。程序 17,251,328 字节，SHA-256：`5db969054fdcacc9807dacefe5dd56811b6123bb442ead6d9358d7d948565ddc`。
+- 15:59 HKT 正式 0.6.3 通过 6 项真实 Pi/官方 ACP 检查，渲染错误 0、模型请求 0；已查看 `artifacts/v063-official-desktop.png`。回执和程序、清单 SHA-256 一致。
+- 已同步实际 Windows 桌面安装目录 `%LOCALAPPDATA%\Programs\Pi Desktop\fdea6c4` 和 `D:\PI\desktop\release\tauri`，两处 ProductVersion 为 0.6.3，快捷方式目标已核对。原 0.6.2 备份分别为 `fdea6c4.backup-2026-11-08T08-00-54-073Z-975c0d8b`、`tauri.backup-2026-11-08T08-00-54-512Z-4912377c`。
+- 记录：`v063-package.log`、`v063-release.log`、`v063-deploy-installed.log`、`v063-deploy-runtime.log`；用户原窗口确认空闲后正常关闭，用户凭据、设置和历史均保留。未生成新 NSIS 或进行 Windows 代码签名。
+
 ## 0.6.2 历史模型恢复（2026-11-08）
 
 - 补齐 0.6.1 真实旧会话复查发现的问题：CLI 新进程恢复历史时可能返回默认模型配置。现在按缓存重新设置仍受支持的模型/推理选项，服务端成功后再落盘，界面保持服务端确认过的值。
