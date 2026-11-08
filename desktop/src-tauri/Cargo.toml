@@ -1,6 +1,6 @@
 [package]
 name = "pi-desktop"
-version = "0.6.1"
+version = "0.6.2"
 description = "Native desktop workspace for Pi"
 authors = ["Pi Desktop contributors"]
 license = "MIT"

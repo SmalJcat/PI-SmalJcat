@@ -33,7 +33,7 @@ export async function officialAntigravityChecks(page, artifacts, checks, waitFor
   await waitForProcessExit(originalPid);
   assert.equal(await input.inputValue(), '权限切换保留草稿');
   assert.ok((await trigger.innerText()).includes(chosen.name));
-  await page.screenshot({ path: path.join(artifacts, 'v061-official-desktop.png') });
+  await page.screenshot({ path: path.join(artifacts, 'v062-official-desktop.png') });
   await panel.getByLabel('Antigravity 权限', { exact: true }).selectOption('ask');
   state = await waitForValue(status, state => state.connected && !state.connecting && state.permissionMode === 'ask', 90000);
   assert.equal(state.sessionId, id);
@@ -116,7 +116,7 @@ export async function antigravityChecks(page, artifacts, checks, waitForValue, w
   state = await waitForValue(status, state => !state.busy && state.messages.some(message => JSON.stringify(message).includes('ACP_IMAGE_COUNT:1')));
   assert.equal(state.permissions.length, 0);
   await page.waitForFunction(() => !document.querySelector('.antigravity-main .attachment'));
-  await page.screenshot({ path: path.join(artifacts, 'v061-antigravity.png') });
+  await page.screenshot({ path: path.join(artifacts, 'v062-antigravity.png') });
   await panel.getByLabel('Antigravity 权限', { exact: true }).selectOption('ask');
   await waitForValue(status, state => state.connected && !state.connecting && state.permissionMode === 'ask');
   checks.push('输入栏直接显示当前模型/档位，权限切换真正重启 CLI 且保留会话/配置/草稿/附件；发送失败保留附件');
@@ -134,6 +134,7 @@ export async function antigravityChecks(page, artifacts, checks, waitForValue, w
   await panel.getByLabel('Antigravity 历史会话', { exact: true }).selectOption(id);
   await waitForValue(status, state => state.sessionId === id && !state.connecting);
   await page.waitForFunction(() => document.querySelector('textarea[aria-label="Antigravity 消息"]').value === 'Antigravity 独立草稿');
+  assert.match(await trigger.innerText(), /Claude fixture\s+高/);
   await panel.locator('.markdown').filter({ hasText: 'ACP_PERMISSION_ALLOWED' }).first().waitFor();
   checks.push('Antigravity 模型/推理设置、新建/恢复历史、Pi/ACP 草稿和会话隔离');
 
@@ -169,7 +170,7 @@ export async function antigravityChecks(page, artifacts, checks, waitForValue, w
   checks.push('ACP 长流式中文/emoji/URL 完整呈现，连续 2048 组内容不丢失、不突破消息宽度');
   const originalViewport = await page.evaluate(() => ({ width: innerWidth, height: innerHeight }));
   await page.setViewportSize({ width: 1024, height: 768 });
-  await page.screenshot({ path: path.join(artifacts, 'v061-antigravity-small.png') });
+  await page.screenshot({ path: path.join(artifacts, 'v062-antigravity-small.png') });
   const editorBounds = await input.boundingBox(); assert.ok(editorBounds.x >= 0 && editorBounds.x + editorBounds.width <= 1024);
   const toolbar = panel.locator('.composer-toolbar');
   assert.ok(await toolbar.evaluate(element => element.scrollWidth <= element.clientWidth + 1));

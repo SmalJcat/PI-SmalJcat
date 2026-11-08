@@ -520,18 +520,6 @@ impl Antigravity {
             if init["protocolVersion"] != 1 { bail!("Antigravity 返回不支持的 ACP 协议版本"); }
             self.change(|state| { state.capabilities = init["agentCapabilities"].clone(); state.agent_info = init["agentInfo"].clone(); state.connected = true; state.pid = Some(connection.pid); json!({}) });
             self.setup_session(&connection, restore.as_ref().map(|conversation| conversation.session_id.as_str()), restore.as_ref()).await?;
-            if let Some(previous) = &restore {
-                let mut options = previous.config_options.clone();
-                options.sort_by_key(|option| option["category"] != "model");
-                for option in options {
-                    let (Some(id), Some(value)) = (option["id"].as_str(), option["currentValue"].as_str()) else { continue };
-                    let supported = self.state.lock().unwrap().conversation.config_options.iter().any(|current| current["id"] == id && current["currentValue"] != value && has_option(&current["options"], value));
-                    if supported {
-                        let response = connection.request("session/set_config_option", json!({"sessionId":previous.session_id,"configId":id,"value":value}), CONTROL_TIMEOUT).await?;
-                        self.apply_config_response(id, value, &response);
-                    }
-                }
-            }
             self.save().await;
             Ok::<_, anyhow::Error>(())
         }.await;
@@ -612,7 +600,47 @@ impl Antigravity {
             }
             json!({"reset":true,"messages":state.conversation.messages,"tools":state.conversation.tools})
         });
+        if let Some(previous) = &cached {
+            self.restore_configuration(connection, previous).await?;
+        }
         self.save().await;
+        Ok(())
+    }
+    async fn restore_configuration(
+        &self,
+        connection: &Transport,
+        previous: &Conversation,
+    ) -> Result<()> {
+        let mut options = previous.config_options.clone();
+        options.sort_by_key(|option| option["category"] != "model");
+        for option in options {
+            let (Some(id), Some(value)) = (option["id"].as_str(), option["currentValue"].as_str())
+            else {
+                continue;
+            };
+            let supported = self
+                .state
+                .lock()
+                .unwrap()
+                .conversation
+                .config_options
+                .iter()
+                .any(|current| {
+                    current["id"] == id
+                        && current["currentValue"] != value
+                        && has_option(&current["options"], value)
+                });
+            if supported {
+                let response = connection
+                    .request(
+                        "session/set_config_option",
+                        json!({"sessionId":previous.session_id,"configId":id,"value":value}),
+                        CONTROL_TIMEOUT,
+                    )
+                    .await?;
+                self.apply_config_response(id, value, &response);
+            }
+        }
         Ok(())
     }
     pub async fn session(self: &Arc<Self>, id: Option<&str>) -> Result<Value> {

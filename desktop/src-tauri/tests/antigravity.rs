@@ -52,6 +52,14 @@ async fn handshake_stream_config_cache_resume_and_shutdown() {
     reopened.connect(root.path(), None).await.unwrap();
     reopened.session(Some(&id)).await.unwrap();
     assert_eq!(reopened.status()["messages"], complete["messages"]);
+    assert_eq!(
+        reopened.status()["configOptions"][0]["currentValue"],
+        "claude-fixture"
+    );
+    assert_eq!(
+        reopened.status()["configOptions"][1]["currentValue"],
+        "high"
+    );
     reopened.shutdown().await;
 }
 #[tokio::test]
@@ -306,6 +314,21 @@ async fn installed_official_cli() {
                 .find(|option| option["id"] == "model")
                 .unwrap()["currentValue"],
             "claude-opus-5-5"
+        );
+    }
+    manager.shutdown().await;
+    let manager = Antigravity::new(root.path().join("desktop-data"));
+    manager.connect(root.path(), None).await.unwrap();
+    let reopened = manager.session(Some(&first_session)).await.unwrap();
+    for (id, value) in [("model", "claude-opus-5-5"), ("thought_level", "low")] {
+        assert_eq!(
+            reopened["configOptions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|option| option["id"] == id)
+                .unwrap()["currentValue"],
+            value
         );
     }
     if std::env::var("PI_DESKTOP_ACP_MODEL_TEST").as_deref() == Ok("1") {
