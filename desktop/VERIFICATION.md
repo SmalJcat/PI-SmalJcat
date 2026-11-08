@@ -8,7 +8,14 @@
 - 使用本机官方 Antigravity CLI 1.5.3 完成一次真实 Claude Opus 5.5 只读任务：只读临时目录 README，回复其中的标记；未改项目或账号配置。此任务消耗官方 CLI 对应的模型用量，可能含内部工具轮次；与 fixture 的零调用记录分开。另验证了真实 initialize、模型/档位配置、session/list 和新建后恢复（额外模型调用 0）。记录：`artifacts/v060-official-acp.log`、`v060-official-metadata.log`。
 - 已查看 `artifacts/v060-antigravity.png`，窄窗口截图为 `v060-antigravity-small.png`；完整本地回执/日志在 `tauri-ui-result.json`、`v060-ui.log`、`v060-js.log`、`v060-rust.log` 与 `v060-acp-tests.log`。测试产物、用户 CLI 凭据和会话不提交 Git。
 
-正式发布与本机部署结果将在构建后追加。
+正式程序交付（12:27 HKT）：
+
+- release 构建来自干净提交 `7a19735e3257f77e69ff1954adda2b2a3a0fb975`；122 个范围内文件的源码指纹为 `cc9abb954afba57e030111f03e93b7892e6c47dee269b397d3871decdbaac916`。后续文档提交不改变程序源码。
+- 程序 17,191,936 字节；SHA-256：`f5be5b82284cdd28b543851c0c89f8786807b9765cd5d521172d35eecde98000`。
+- 12:24 HKT 正式程序完成真实 Pi 与官方 ACP 启动验收，6 项通过、渲染错误 0、模型请求 0。读取已有登录、真实模型列表，切换到 Claude Opus 5.5，断开并核对所属进程退出；已查看 `artifacts/v060-official-desktop.png`，确认只有一个主区且输入栏正常。记录：`artifacts/tauri-release-result.json`、`v060-release.log`。复现入口：`pwsh.exe -NoProfile -ExecutionPolicy Bypass -File tests/run-tauri-ui-medium.ps1 -Mode release -Antigravity`。
+- 已部署到 `%LOCALAPPDATA%\Programs\Pi Desktop\fdea6c4` 和 `D:\PI\desktop\release\tauri`；两处 ProductVersion 均为 0.6.0，程序、清单和正式验收 SHA-256 一致。Windows 桌面快捷方式仍指向该安装目录，退出并重新打开应用即可使用。
+- 安装目录原 0.5.3 备份：`fdea6c4.backup-2026-11-08T04-27-06-083Z-a8ce704a`；D:\PI 原版备份：`tauri.backup-2026-11-08T04-27-06-568Z-c2be4499`。部署日志：`artifacts/v060-deploy-installed.log`、`v060-deploy-runtime.log`。
+- 本轮没有重新生成 NSIS 安装器或进行 Authenticode 签名；用户 CLI 凭据、个人配置、会话和构建产物不提交 Git。
 
 ## 0.5.3 参考图输入栏（2026-11-08）
 
