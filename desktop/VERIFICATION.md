@@ -4,6 +4,9 @@
 
 - 补齐 0.6.1 真实旧会话复查发现的问题：CLI 新进程恢复历史时可能返回默认模型配置。现在按缓存重新设置仍受支持的模型/推理选项，服务端成功后再落盘，界面保持服务端确认过的值。
 - Rust 141 项通过（2 项默认跳过），全目标严格 Clippy 通过；加强的回归验证 manager 重开与缓存恢复后的模型和档位。官方 CLI 1.5.3 的 metadata-only 检查额外验证关闭旧 manager、建立新连接并恢复同一历史后的 Claude Opus 5.5 / low 配置；本轮模型请求 0。证据：`artifacts/v062-rust.log`、`v062-clippy.log`、`v062-official-metadata.log`。
+- 15:24 HKT 新构建的 0.6.2 完成 54 项 WebView2 + fixture 验收，渲染错误 0、模型请求 0；前端 JS 104 项沿用 0.6.1 的通过记录，本次没有改变其运行逻辑。15:25 HKT 正式程序另通过 6 项真实 Pi / ACP 检查，模型请求 0；已查看 `artifacts/v062-official-desktop.png`。证据：`v062-debug-build.log`、`v062-ui.log`、`v062-release.log`、`tauri-ui-result.json`、`tauri-release-result.json`。
+- 15:26 HKT 已将最终 0.6.2 同步到 Windows 桌面快捷方式对应安装目录及 `D:\PI\desktop\release\tauri`，两处 ProductVersion、清单和验收文件哈希一致。程序 17,234,432 字节，SHA-256：`c8f28f98a2abb18f3ce98db67e84b147dac7c1d448df016c91595a1fe262b0bd`。
+- 构建来自干净提交 `87b70b985d83e2f41c8b077955a1b34571e0b0c4`；122 个文件的源码指纹 `c16957029e4a841b90cff05fc7699afab34c624d1f3ade973743076c3e8494b1`。原 0.6.1 备份为 `fdea6c4.backup-2026-11-08T07-26-33-265Z-348c8a00` 与 `tauri.backup-2026-11-08T07-26-33-710Z-af5b433a`；0.6.0 备份仍保留。未生成新 NSIS 或 Windows 代码签名。
 
 ## 0.6.1 输入栏与权限（2026-11-08）
 
