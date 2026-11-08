@@ -68,6 +68,10 @@ export async function composerModelChecks(page, artifacts, checks) {
   await page.screenshot({ path: path.join(artifacts, 'v053-composer-models-small.png') });
   await page.keyboard.press('Escape');
   await panel.waitFor({ state: 'hidden' });
+  const current = (await page.evaluate(() => window.pi.snapshot())).state;
+  const triggerText = await page.getByRole('button', { name: '模型与推理强度', exact: true }).innerText();
+  assert.ok(triggerText.includes(current.model.name || current.model.id));
+  assert.match(triggerText, /高/);
   assert.equal(await page.getByRole('button', { name: '模型与推理强度', exact: true }).evaluate(element => document.activeElement === element), true);
   await page.setViewportSize(original);
   const editor = page.getByRole('textbox', { name: '消息', exact: true });

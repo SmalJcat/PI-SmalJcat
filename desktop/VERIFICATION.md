@@ -1,5 +1,13 @@
 # Pi Desktop 发布验收
 
+## 0.6.1 输入栏与权限（2026-11-08）
+
+- Pi / Antigravity 输入栏直接显示当前模型和推理档位；Antigravity 权限从静态文字改为真实的按需确认 / 完全访问选择。通过官方 CLI 启动参数切换，不修改全局配置；重连恢复当前会话、有效模型/推理、草稿和附件。收紧权限失败后也保持按需确认。具体边界见 [接入说明](docs/ANTIGRAVITY-ACP.md)。
+- JavaScript 104 项、Rust 141 项通过（2 项本机服务测试默认跳过），TypeScript/Vite、全目标严格 Clippy 与格式化通过。新增 ACP 集成覆盖权限双向切换、同会话重连、配置保留、双向切换失败、长 Unicode 流及图片能力/类型校验和缓存重开恢复。
+- 15:12 HKT 真实 WebView2 + fixture 验收 54 项通过、渲染错误 0、模型请求 0。新增当前模型/档位的可见文字、权限进程切换与旧 PID 退出、会话/草稿/附件保留、发送失败保留附件、运行中禁止切换权限，以及 2048 组中文/emoji 加长 URL 的完整流式输出和消息宽度检查。已查看正常/1024px 截图：`artifacts/v061-antigravity.png`、`v061-antigravity-small.png`。
+- 本机官方 CLI 1.5.3 的 metadata-only 集成验证通过：真实 `--dangerously-skip-permissions` 与默认模式双向切换后恢复同一会话、模型/推理。模型调用 0，没有改全局 CLI 账号或权限设置。记录：`artifacts/v061-official-metadata.log`；本轮未再次执行真实模型任务。
+- 回执/日志：`artifacts/tauri-ui-result.json`、`v061-ui.log`、`v061-js.log`、`v061-rust.log`、`v061-clippy.log`、`v061-debug-build.log`。已用 computer-use 确认原桌面窗口空闲并正常关闭，为正式版验收释放单实例。
+
 ## 0.6.0 Antigravity CLI（2026-11-08）
 
 - 新增独立 ACP v1 后端、主区和受管理子进程，复用官方 CLI 的已有登录。桥接、权限、历史与当前边界见 [接入说明](docs/ANTIGRAVITY-ACP.md)。

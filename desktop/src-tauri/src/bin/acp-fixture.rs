@@ -43,6 +43,13 @@ fn options(model: &str, level: &str, mode: &str) -> Value {
     ])
 }
 fn main() {
+    let full_access = std::env::args().any(|argument| argument == "--dangerously-skip-permissions");
+    if full_access && std::env::args().any(|argument| argument == "--fail-full-access") {
+        std::process::exit(10);
+    }
+    if !full_access && std::env::args().any(|argument| argument == "--fail-ask") {
+        std::process::exit(11);
+    }
     let out = Arc::new(Mutex::new(io::stdout()));
     let state = Arc::new(Mutex::new(State::default()));
     for line in io::stdin().lock().lines() {
@@ -62,6 +69,9 @@ fn main() {
         match method {
             "initialize" => {
                 let mut init = json!({"protocolVersion":1,"agentInfo":{"name":"ACP fixture","version":"1"},"agentCapabilities":{"loadSession":true,"promptCapabilities":{"image":true},"sessionCapabilities":{"list":{},"resume":{}}}});
+                if std::env::args().any(|argument| argument == "--no-images") {
+                    init["agentCapabilities"]["promptCapabilities"]["image"] = json!(false);
+                }
                 if std::env::args().any(|argument| argument == "--no-resume") {
                     init["agentCapabilities"]["sessionCapabilities"]
                         .as_object_mut()
@@ -127,6 +137,9 @@ fn main() {
                 state.lock().unwrap().cancel.store(true, Ordering::SeqCst);
             }
             "session/prompt" => {
+                let image_count = params["prompt"].as_array().map_or(0, |items| {
+                    items.iter().filter(|item| item["type"] == "image").count()
+                });
                 let text = params["prompt"]
                     .as_array()
                     .map(|items| {
@@ -147,6 +160,10 @@ fn main() {
                 let state = state.clone();
                 let out = out.clone();
                 thread::spawn(move || {
+                    let mut transcript = "ACP 中文".to_owned();
+                    if image_count > 0 {
+                        transcript.push_str(&format!(" ACP_IMAGE_COUNT:{image_count} "));
+                    }
                     update(
                         &out,
                         &session,
@@ -155,8 +172,32 @@ fn main() {
                     update(
                         &out,
                         &session,
-                        json!({"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"ACP 中文"}}),
+                        json!({"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":transcript}}),
                     );
+                    if text.contains("[long]") {
+                        for index in 0..64 {
+                            if cancelled.load(Ordering::SeqCst) {
+                                break;
+                            }
+                            let part = format!(
+                                "\n{index:03} {} https://example.test/{}\n",
+                                "长输出🙂".repeat(32),
+                                "a".repeat(256)
+                            );
+                            transcript.push_str(&part);
+                            update(
+                                &out,
+                                &session,
+                                json!({"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":part}}),
+                            );
+                        }
+                        transcript.push_str("ACP_LONG_END");
+                        update(
+                            &out,
+                            &session,
+                            json!({"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"ACP_LONG_END"}}),
+                        );
+                    }
                     let mut suffix = "🙂 完成";
                     if text.contains("[permission]") {
                         let tool_id = Uuid::new_v4().to_string();
@@ -166,16 +207,21 @@ fn main() {
                             .lock()
                             .unwrap()
                             .permissions
-                            .insert(json!(permission).to_string(), tx);
+                            .insert(json!(permission).to_string(), tx.clone());
                         update(
                             &out,
                             &session,
                             json!({"sessionUpdate":"tool_call","toolCallId":tool_id,"title":"测试命令","kind":"execute","status":"pending","rawInput":{"command":"echo ACP_FIXTURE"}}),
                         );
-                        send(
-                            &out,
-                            json!({"jsonrpc":"2.0","id":permission,"method":"session/request_permission","params":{"sessionId":session,"toolCall":{"toolCallId":tool_id,"title":"测试命令","rawInput":{"command":"echo ACP_FIXTURE"}},"options":[{"optionId":"allow","name":"允许一次","kind":"allow_once"},{"optionId":"reject","name":"拒绝","kind":"reject_once"}]}}),
-                        );
+                        if full_access {
+                            let _ = tx
+                                .send(json!({"outcome":{"outcome":"selected","optionId":"allow"}}));
+                        } else {
+                            send(
+                                &out,
+                                json!({"jsonrpc":"2.0","id":permission,"method":"session/request_permission","params":{"sessionId":session,"toolCall":{"toolCallId":tool_id,"title":"测试命令","rawInput":{"command":"echo ACP_FIXTURE"}},"options":[{"optionId":"allow","name":"允许一次","kind":"allow_once"},{"optionId":"reject","name":"拒绝","kind":"reject_once"}]}}),
+                            );
+                        }
                         let result = loop {
                             if cancelled.load(Ordering::SeqCst) {
                                 break None;
@@ -213,7 +259,7 @@ fn main() {
                     }
                     thread::sleep(Duration::from_millis(60));
                     if !cancelled.load(Ordering::SeqCst) {
-                        state.lock().unwrap().history.entry(session.clone()).or_default().push(json!({"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":format!("ACP 中文{suffix}")}}));
+                        state.lock().unwrap().history.entry(session.clone()).or_default().push(json!({"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":format!("{transcript}{suffix}")}}));
                         update(
                             &out,
                             &session,

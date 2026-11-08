@@ -179,6 +179,11 @@ async fn dispatch(
                         .await
                 }
                 "list" => antigravity.list().await,
+                "set-permission-mode" => {
+                    antigravity
+                        .set_permission_mode(payload["mode"].as_str().context("缺少权限模式")?)
+                        .await
+                }
                 "configure" => {
                     antigravity
                         .configure(

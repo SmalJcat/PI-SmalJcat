@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { Check, ChevronDown, ChevronRight, LoaderCircle, RotateCcw, Search, Zap } from './icons';
 import type { Model } from './types';
 
-const labels: Record<string, string> = { off: '关闭', minimal: '最低', low: '低', medium: '中', high: '高', xhigh: '超高', max: '最高' };
+const labels: Record<string, string> = { off: '关闭', minimal: '最低', low: '低', medium: '中', high: '高', xhigh: '极高', max: '最高' };
 const keyOf = (model?: Model) => model ? `${model.provider}::${model.id}` : '';
 
 export function ComposerModelControl({ models, model, levels, level, ready, locked, onModelChange, onLevelChange, onError }: {
@@ -82,7 +82,7 @@ export function ComposerModelControl({ models, model, levels, level, ready, lock
 
   return <>
     <button ref={trigger} className={`composer-reasoning-trigger ${open ? 'active' : ''}`} type="button" aria-label="模型与推理强度" aria-haspopup="dialog" aria-expanded={open} aria-controls={open ? id : undefined} disabled={!ready} title={`${model?.name || model?.id || '选择模型'} · ${labels[level] || level}`} onClick={() => { if (open) close(); else { setDraft(level); setOpen(true); } }}>
-      <span>选择推理强度</span><ChevronDown size={15} />
+      {pending ? <LoaderCircle size={16} className="spin" /> : <Zap size={16} />}<span className="composer-current-model">{model?.name || model?.id || '选择模型'}</span>{levels.length > 0 && <span className="composer-current-level">{labels[level] || level}</span>}<ChevronDown size={14} />
     </button>
     {open && createPortal(<div ref={panel} id={id} className="reasoning-popover" role="dialog" aria-label="模型与推理设置" aria-modal="false" style={position}>
       <div className="reasoning-heading"><Zap size={18} /><div><strong aria-live="polite">{pending ? <LoaderCircle size={18} className="spin" /> : labels[draft] || draft}</strong><button type="button" className="reasoning-model" aria-label="选择模型" aria-expanded={showModels} disabled={disabled} onClick={() => setShowModels(value => !value)}>{model?.name || model?.id || '选择模型'}<ChevronRight size={14} /></button></div><button type="button" className="reasoning-reset" title="设为中等推理" aria-label="设为中等推理" disabled={disabled || !choices.includes('medium')} onClick={() => chooseLevel('medium')}><RotateCcw size={18} /></button></div>

@@ -13,6 +13,7 @@
 - `prompt`：`text`，可选图片；立即返回，输出经独立事件流推送。
 - `cancel`：取消当前 ACP 任务，待处理权限回 cancelled；超时终止受管理的进程树。
 - `configure`：`configId` / `value`，只接受服务器当前列出的合法值，空闲时设置。
+- `set-permission-mode`：`mode` 为 `ask` 或 `full-access`，空闲时切换本次桌面运行的 CLI 启动权限；已连接时恢复到同一会话，失败保留原对话。收紧到 `ask` 即使连接失败，后续重连也保持 `ask`。
 - `permission`：桌面生成的权限 `id`，可选 `optionId`；校验属于当前连接/会话/请求，未选视为取消。
 - `disconnect`：取消任务并关闭本桌面创建的 ACP 进程树。
 
@@ -22,7 +23,9 @@ ACP 事件经主窗口既有 Channel 传输，envelope 标记 `engine: antigravi
 
 运行中禁止切换工作区、会话或配置；可切回 Pi 查看，ACP 任务继续运行。关窗确认包含 ACP 忙碌状态。子进程附加 Windows Job，退出/取消超时/桌面崩溃均清理所属进程树。
 
-官方 CLI 发现位置为 `%LOCALAPPDATA%/agy/bin/agy.exe`，允许在界面选择其它安装路径；启动参数为固定 `acp`，不拼 shell。读取 Windows HTTP/HTTPS 系统代理并传给该子进程，回环地址绕过代理。
+官方 CLI 发现位置为 `%LOCALAPPDATA%/agy/bin/agy.exe`，允许在界面选择其它安装路径；启动命令为 `acp`，用户显式选择完全访问时附加官方 `--dangerously-skip-permissions`，不拼 shell。读取 Windows HTTP/HTTPS 系统代理并传给该子进程，回环地址绕过代理。权限选择不写入官方 CLI 的全局设置，不持久化到下一次桌面启动。
+
+官方 ACP 目前只提供模型与推理配置，权限不是 `session/set_config_option` 的虚构选项。默认“按需确认”遵循 CLI 现有规则并展示其权限请求；“完全访问”通过官方参数跳过工具确认，不提供额外的 OS 沙箱。切换会关闭旧进程并恢复当前会话及可用的原模型/推理配置，期间禁止发送；失败显示错误，不自动重新发送任务。
 
 桌面保存 Antigravity 消息显示缓存到独立数据子目录；恢复优先用官方 resume，避免重复重放。没有本机显示缓存时使用官方 load（如服务器支持），可能受 CLI 历史重放能力限制。原始会话始终由官方 CLI 持有。测试使用独立 ACP fixture，不读取真实凭据或模型。
 
@@ -30,7 +33,7 @@ ACP 事件经主窗口既有 Channel 传输，envelope 标记 `engine: antigravi
 
 1. 先在本机官方 CLI 完成一次登录。
 2. 桌面侧栏点 Antigravity，再点“连接已有登录”。安装路径不同可展开连接设置选择 agy.exe。
-3. 在模型与推理面板选择官方 CLI 返回的选项，输入文字/添加附件后发送；权限弹窗根据具体命令或文件操作选择允许/拒绝。
+3. 输入栏直接显示当前模型与推理档位，点击可选择官方 CLI 返回的选项；左侧选择权限，输入文字/添加附件后发送，按需确认模式下根据工具弹窗选择允许/拒绝。
 4. “返回 Pi”保留原 Pi 草稿和会话；历史下拉、新会话和断开只操作 Antigravity。
 
 ## 当前边界

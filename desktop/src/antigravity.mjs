@@ -1,5 +1,5 @@
 // Authoritative ACP snapshots and patches have their own revision/session space.
-export const emptyAntigravity = () => ({ revision: -1, agentInfo: {}, capabilities: {}, connected: false, busy: false, connecting: false, messages: [], tools: {}, configOptions: [], permissions: [], sessionId: '', cwd: '', error: '' });
+export const emptyAntigravity = () => ({ revision: -1, agentInfo: {}, capabilities: {}, permissionMode: 'ask', connected: false, busy: false, connecting: false, messages: [], tools: {}, configOptions: [], permissions: [], sessionId: '', cwd: '', error: '' });
 export function applyAntigravity(previous, next) {
   if (!next || !Number.isSafeInteger(next.revision) || next.revision < previous.revision) return previous;
   const reset = next.reset || next.sessionId && previous.sessionId && next.sessionId !== previous.sessionId;

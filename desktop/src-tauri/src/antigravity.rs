@@ -238,6 +238,22 @@ struct Permission {
     rpc_id: Value,
     params: Value,
 }
+#[derive(Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum PermissionMode {
+    #[default]
+    Ask,
+    FullAccess,
+}
+impl PermissionMode {
+    fn parse(value: &str) -> Result<Self> {
+        match value {
+            "ask" => Ok(Self::Ask),
+            "full-access" => Ok(Self::FullAccess),
+            _ => bail!("无效 Antigravity 权限模式"),
+        }
+    }
+}
 #[derive(Default)]
 struct State {
     epoch: u64,
@@ -251,6 +267,7 @@ struct State {
     pid: Option<u32>,
     capabilities: Value,
     agent_info: Value,
+    permission_mode: PermissionMode,
     conversation: Conversation,
     permissions: BTreeMap<String, Permission>,
 }
@@ -287,7 +304,7 @@ impl Antigravity {
         state.busy || state.connecting
     }
     fn summary(state: &State) -> Value {
-        json!({"revision":state.revision,"connected":state.connected,"connecting":state.connecting,"busy":state.busy,"cancelling":state.cancelling,"capabilities":state.capabilities,"error":state.error,"pid":state.pid,"sessionId":state.conversation.session_id,"cwd":state.conversation.cwd,"configOptions":state.conversation.config_options,"agentInfo":state.agent_info,"permissions":state.permissions.iter().map(|(id,request)|json!({"id":id,"toolCall":request.params["toolCall"],"options":request.params["options"]})).collect::<Vec<_>>()})
+        json!({"revision":state.revision,"connected":state.connected,"connecting":state.connecting,"busy":state.busy,"cancelling":state.cancelling,"capabilities":state.capabilities,"error":state.error,"pid":state.pid,"sessionId":state.conversation.session_id,"cwd":state.conversation.cwd,"configOptions":state.conversation.config_options,"agentInfo":state.agent_info,"permissionMode":state.permission_mode,"permissions":state.permissions.iter().map(|(id,request)|json!({"id":id,"toolCall":request.params["toolCall"],"options":request.params["options"]})).collect::<Vec<_>>()})
     }
     pub fn status(&self) -> Value {
         let state = self.state.lock().unwrap();
@@ -395,6 +412,44 @@ impl Antigravity {
     }
     pub async fn connect(self: &Arc<Self>, cwd: &Path, executable: Option<&str>) -> Result<Value> {
         let _operation = self.operation.lock().await;
+        let permission_mode = self.state.lock().unwrap().permission_mode;
+        self.connect_inner(cwd, executable, permission_mode).await
+    }
+    pub async fn set_permission_mode(self: &Arc<Self>, mode: &str) -> Result<Value> {
+        let mode = PermissionMode::parse(mode)?;
+        let _operation = self.operation.lock().await;
+        if self.busy() {
+            bail!("请先停止当前 Antigravity 任务");
+        }
+        let (current, connected, cwd) = {
+            let state = self.state.lock().unwrap();
+            (
+                state.permission_mode,
+                state.connected,
+                state.conversation.cwd.clone(),
+            )
+        };
+        if mode == current {
+            return Ok(self.status());
+        }
+        if connected {
+            // ACP has no runtime approval selector. The official flag applies to a
+            // process, so reopen the same session with an explicitly selected policy.
+            self.connect_inner(Path::new(&cwd), None, mode).await
+        } else {
+            self.change(|state| {
+                state.permission_mode = mode;
+                json!({})
+            });
+            Ok(self.status())
+        }
+    }
+    async fn connect_inner(
+        self: &Arc<Self>,
+        cwd: &Path,
+        executable: Option<&str>,
+        permission_mode: PermissionMode,
+    ) -> Result<Value> {
         if self.busy() {
             bail!("请先停止当前 Antigravity 任务");
         }
@@ -402,8 +457,7 @@ impl Antigravity {
         if !cwd.is_dir() {
             bail!("工作区必须是文件夹");
         }
-        self.shutdown_inner().await;
-        let spec = if let Some(spec) = &self.launcher {
+        let mut spec = if let Some(spec) = &self.launcher {
             spec.clone()
         } else if cfg!(feature = "test-fixture")
             && std::env::var("PI_DESKTOP_TEST").as_deref() == Ok("1")
@@ -436,15 +490,26 @@ impl Antigravity {
                 args: vec!["acp".into()],
             }
         };
+        if permission_mode == PermissionMode::FullAccess {
+            spec.args.push("--dangerously-skip-permissions".into());
+        }
+        let (previous, previous_mode) = {
+            let state = self.state.lock().unwrap();
+            (state.conversation.clone(), state.permission_mode)
+        };
+        let restore = (!previous.session_id.is_empty() && Path::new(&previous.cwd) == cwd)
+            .then(|| previous.clone());
+        self.shutdown_inner().await;
         self.change(|state| {
             state.epoch += 1;
             state.connecting = true;
             state.error.clear();
-            state.conversation = Conversation {
+            state.permission_mode = permission_mode;
+            state.conversation = restore.clone().unwrap_or_else(|| Conversation {
                 cwd: cwd.to_string_lossy().into_owned(),
                 ..Default::default()
-            };
-            json!({"reset":true,"messages":[],"tools":{}})
+            });
+            json!({"reset":true,"messages":state.conversation.messages,"tools":state.conversation.tools})
         });
         let epoch = self.state.lock().unwrap().epoch;
         let result = async {
@@ -454,14 +519,35 @@ impl Antigravity {
             let init = connection.request("initialize", json!({"protocolVersion":1,"clientInfo":{"name":"pi-desktop","version":env!("CARGO_PKG_VERSION")},"clientCapabilities":{"fs":{"readTextFile":false,"writeTextFile":false},"terminal":false}}), CONTROL_TIMEOUT).await?;
             if init["protocolVersion"] != 1 { bail!("Antigravity 返回不支持的 ACP 协议版本"); }
             self.change(|state| { state.capabilities = init["agentCapabilities"].clone(); state.agent_info = init["agentInfo"].clone(); state.connected = true; state.pid = Some(connection.pid); json!({}) });
-            self.setup_session(&connection, None).await?;
+            self.setup_session(&connection, restore.as_ref().map(|conversation| conversation.session_id.as_str()), restore.as_ref()).await?;
+            if let Some(previous) = &restore {
+                let mut options = previous.config_options.clone();
+                options.sort_by_key(|option| option["category"] != "model");
+                for option in options {
+                    let (Some(id), Some(value)) = (option["id"].as_str(), option["currentValue"].as_str()) else { continue };
+                    let supported = self.state.lock().unwrap().conversation.config_options.iter().any(|current| current["id"] == id && current["currentValue"] != value && has_option(&current["options"], value));
+                    if supported {
+                        let response = connection.request("session/set_config_option", json!({"sessionId":previous.session_id,"configId":id,"value":value}), CONTROL_TIMEOUT).await?;
+                        self.apply_config_response(id, value, &response);
+                    }
+                }
+            }
+            self.save().await;
             Ok::<_, anyhow::Error>(())
         }.await;
         if let Err(error) = result {
             self.shutdown_inner().await;
             self.change(|state| {
                 state.error = format!("{error:#}");
-                json!({})
+                state.conversation = previous;
+                // A failed attempt to restrict access must never make the next
+                // ordinary reconnect silently enable the previous full access.
+                state.permission_mode = if permission_mode == PermissionMode::Ask {
+                    PermissionMode::Ask
+                } else {
+                    previous_mode
+                };
+                json!({"reset":true,"messages":state.conversation.messages,"tools":state.conversation.tools})
             });
             return Err(error);
         }
@@ -471,13 +557,20 @@ impl Antigravity {
         });
         Ok(self.status())
     }
-    async fn setup_session(&self, connection: &Transport, id: Option<&str>) -> Result<()> {
+    async fn setup_session(
+        &self,
+        connection: &Transport,
+        id: Option<&str>,
+        preferred: Option<&Conversation>,
+    ) -> Result<()> {
         let cwd = self.state.lock().unwrap().conversation.cwd.clone();
-        let mut cached = None;
+        let mut cached = preferred
+            .filter(|value| Some(value.session_id.as_str()) == id && value.cwd == cwd)
+            .cloned();
         if let Some(id) = id {
             let path = self.cache_path(id)?;
             if let Ok(bytes) = std::fs::read(path) {
-                if bytes.len() <= MAX_CACHE {
+                if cached.is_none() && bytes.len() <= MAX_CACHE {
                     if let Ok(value) = serde_json::from_slice::<Conversation>(&bytes) {
                         if value.session_id == id && value.cwd == cwd {
                             cached = Some(value);
@@ -535,7 +628,7 @@ impl Antigravity {
             state.error.clear();
             json!({})
         });
-        let result = self.setup_session(&connection, id).await;
+        let result = self.setup_session(&connection, id, None).await;
         self.change(|state| { state.connecting = false; if result.is_err() { state.conversation = previous; } json!({"reset":true,"messages":state.conversation.messages,"tools":state.conversation.tools}) });
         result?;
         Ok(self.status())
@@ -574,6 +667,11 @@ impl Antigravity {
                 CONTROL_TIMEOUT,
             )
             .await?;
+        self.apply_config_response(id, value, &response);
+        self.save().await;
+        Ok(self.status())
+    }
+    fn apply_config_response(&self, id: &str, value: &str, response: &Value) {
         self.change(|state| {
             if let Some(options) = response["configOptions"].as_array() {
                 state.conversation.config_options = options.clone();
@@ -587,8 +685,6 @@ impl Antigravity {
             }
             json!({})
         });
-        self.save().await;
-        Ok(self.status())
     }
     pub async fn prompt(self: &Arc<Self>, text: &str, images: &[Value]) -> Result<Value> {
         let _operation = self.operation.lock().await;
