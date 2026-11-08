@@ -6,6 +6,7 @@
 
 - `D:\PI-SmalJcat`：Git 源码仓库，包含当前功能与测试。
 - `D:\PI`：本机 Pi 运行环境，快捷方式指向 `desktop/release/tauri/Pi Desktop.exe`。
+- Windows 桌面快捷方式实际指向 `%LOCALAPPDATA%\Programs\Pi Desktop\fdea6c4\Pi Desktop.exe`；本机交付必须同步核对这个安装目录。
 - 本文件是当前状态总览；其他按阶段命名的文档是历史记录，其中的“尚未实现”可能已被后续阶段完成。
 - 发布程序以 `release/tauri/release.json` 的版本、SHA-256 和 `source` 为准，不能只看 package.json。验收 JSON 中的程序哈希必须与待交付程序相同。
 

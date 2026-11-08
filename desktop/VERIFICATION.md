@@ -9,7 +9,13 @@
 - 已查看首页、新任务、任务结果、上下文与小窗口设置截图。证据：`artifacts/v051-home.png`、`v051-agent-create.png`、`v051-settings-small.png`、`v04-agents.png`、`v04-context-overview.png`；验收 JSON 和日志在 `artifacts/tauri-ui-result.json`、`v051-ui.log`、`v051-js.log`、`v051-rust.log`。
 - 测试启动时曾被用户正在运行的正式版单实例门禁拦截；现在仅对显式隔离的 fixture 进程跳过该门禁，正式程序维持单实例。新增冷启动回归随后完整通过。
 
-正式程序交付摘要将在打包及部署后追加。
+正式程序交付（09:05 HKT）：
+
+- release 构建成功，源提交 `6edacfb623aa22e3de39e5929e594b4e744a8ba9`，构建时工作区干净。
+- 16,671,744 字节；SHA-256：`35e6af7183ef4d543df53bf086719c3646289d7435ae279e4106bf4c32cfc95a`。
+- 已同步至 `D:\PI\desktop\release\tauri` 和 `%LOCALAPPDATA%\Programs\Pi Desktop\fdea6c4`；两处文件 ProductVersion 均为 0.5.1，哈希与源清单一致；实际 Windows 桌面快捷方式已核对。
+- 安装目录旧版备份：`fdea6c4.backup-2026-11-08T01-04-59-594Z-762d4ffa`；D:\PI 旧版备份：`tauri.backup-2026-11-08T01-05-11-321Z-bc409a18`。
+- 保留了用户正在运行的旧窗口，重开应用后加载新程序。本轮没有运行正式版真实 Pi 启动检查（生产单实例会激活现有窗口）；44 项 UI 验收针对隔离的测试构建，不能声称本轮已完成正式版启动验收。没有生成新 NSIS 安装器。
 
 ## 0.5.0 本机交付（2026-11-08）
 
