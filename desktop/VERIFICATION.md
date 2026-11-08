@@ -6,7 +6,17 @@
 
 实现前基线：JavaScript 96 项通过；Rust 132 项通过、1 项真实 MCP 环境测试跳过；TypeScript/Vite 与 desktop feature 编译检查通过。历史 WebView2 记录为 2026-11-08 08:14 HKT，0.4.1 / 41 项通过，不能作为 0.5.0 最终发布验收。
 
-0.5.0 最终检查和交付结果将在本轮构建、测试与部署完成后记录于此。
+最终结果（本机 Windows / WebView2，2026-11-08）：
+
+- JavaScript 102 项通过（含 5 项部署/回退测试和 1 项源码来源测试）；Rust 132 项通过、1 项真实 MCP 环境测试跳过。`cargo fmt --check`、带 desktop/test-fixture 的严格 Clippy 和 TypeScript/Vite 构建通过。
+- 新构建的 0.5.0 debug 程序完成 41 项真实 WebView2 + 模拟 Pi 验收（08:31 HKT），渲染错误 0，模型调用 0；已查看聊天及设置截图。记录：`artifacts/tauri-ui-result.json`。这是模拟模型流程覆盖，不代表所有新增功能已在真实模型下验证。
+- 正式 release 构建成功；正式程序完成真实 Pi 启动验收（08:33 HKT），读取模型、命令、MCP 和有效上下文配置，正常关闭且所属 Pi 退出；5 项通过、渲染错误 0、模型调用 0。记录：`artifacts/tauri-release-result.json`、`v050-package.log`、`v050-release.log`。
+- 08:34 HKT 已部署到 `D:\PI\desktop\release\tauri`，快捷方式目标未变；源发布程序、目标程序、清单及 release 验收记录 SHA-256 一致，Windows ProductVersion 为 0.5.0。记录：`artifacts/v050-deploy.log`。
+- 程序 16,670,720 字节；SHA-256：`31076c5b6e763464b40ff7884ea7d1aa54da13e86a54524cee84592a5de1ce77`。
+- 构建源提交：`3a837afe44c9de90e80247ff7e1b75096b453085`，构建时工作区干净；113 个范围内文件的指纹：`464202a834ae74df309bfca84ff72986ecf61e33dde087cf3af0f64ea18ffb1a`。后续验收文档提交不改变程序源码。
+- 旧运行版本保留在 `D:\PI\desktop\release\tauri.backup-2026-11-08T00-34-07-021Z-8b54cc75`；回退可将该目录作为 `npm run deploy -- --from` 的来源。
+
+本轮未重新生成或安装 NSIS 包，未验证远端更新；已有 0.4.1 安装器不能代表 0.5.0。程序未做 Authenticode 签名。本轮 0.5.0 清单未签名，来源字段仅为诊断。Vite 主 chunk 约 533 kB 的体积提示仍在。构建产物、私钥、实际用户配置和会话均不提交到 Git。
 
 ## 0.4.1 输入候选菜单更新
 
