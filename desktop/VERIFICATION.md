@@ -9,6 +9,13 @@
 - 真实 Pi 1.5.0 的显式 gate 加载和原生策略查询验证通过，确认 `--no-extensions` 下显式 `-e` 仍加载门扩展，查询随原生模式改变，未发送模型请求。另运行隔离 Pi 上下文设置/重载/项目覆盖检查，保持全局与无关配置。记录：`v070-pi-gate-contract.log`、`v070-real-pi.log`。
 - 日志：`v070-js.log`、`v070-rust.log`、`v070-permission-native.log`、`v070-clippy.log`、`v070-debug-build.log`、`v070-ui.log`。独立审阅指出的焦点和回复失败问题已修复并加回归；真实 CLI 元数据验证脚本的新查询通道接线曾漏接，已停止隔离测试进程、修正并重跑通过。本轮模型调用 0。
 
+正式程序交付（17:50 HKT）：
+
+- 来自干净提交 `66d29d913e1db85e24c1fca5d6b3a86a032e57aa`；128 个范围内文件的源码指纹 `7180980220800094a9428687955e97e323286a2810aca8117906c088cdab06e1`。程序 17,679,360 字节，SHA-256：`37e800442d951e8fe110cd914d97b79a98b40b2cd7fe29d76bec56aa2d978feb`。
+- 17:49 HKT 正式版完成 6 项真实 Pi / 官方 ACP 检查，渲染错误 0、模型调用 0，实际 Pi 模型 8 个、命令 32 项。权限菜单真实切换并保留会话/草稿，CLI 停止后所属进程退出；已查看 `artifacts/v070-official-desktop.png`。
+- 已同步 Windows 桌面实际安装目录 `%LOCALAPPDATA%\Programs\Pi Desktop\fdea6c4` 与 `D:\PI\desktop\release\tauri`；两处版本 0.7.0、程序/清单/正式验收 SHA-256 一致，快捷方式目标已核对。原 0.6.3 备份为 `fdea6c4.backup-2026-11-08T09-50-45-810Z-153b686d` 与 `tauri.backup-2026-11-08T09-50-46-261Z-26ef746d`。
+- 记录：`v070-package.log`、`v070-release.log`、`v070-deploy-installed.log`、`v070-deploy-runtime.log`、`tauri-release-result.json`。交付时未发现运行中的旧 Pi 窗口，没有中断用户任务；未生成新 NSIS 或进行 Authenticode 签名。凭据、实际用户配置、会话与构建产物不提交 Git。
+
 ## 0.6.3 配置恢复失败处理（2026-11-08）
 
 - 明确区分 CLI 的 JSON-RPC 配置拒绝、请求超时和传输失败。配置被明确拒绝或成功响应仍未改变时，保留服务端已确认的实际配置、提示并继续；超时/连接中断关闭连接，不声称配置已生效。失败前还原原会话，避免将未确认配置写回旧缓存。
