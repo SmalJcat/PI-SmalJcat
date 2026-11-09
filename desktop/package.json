@@ -16,6 +16,7 @@
     "test:session-lease": "node scripts/native.mjs cargo build --manifest-path src-tauri/Cargo.toml --locked --no-default-features --features test-fixture --bin pi-session-lease && node tests/session-lease-check.mjs",
     "test:rust": "node scripts/native.mjs cargo test --manifest-path src-tauri/Cargo.toml --no-default-features",
     "test:ui": "npm run build:test && pwsh.exe -NoProfile -ExecutionPolicy Bypass -File tests/run-tauri-ui-medium.ps1",
+    "ui:capture": "node tests/ui-capture.mjs",
     "test:pi": "node scripts/native.mjs cargo run --manifest-path src-tauri/Cargo.toml --no-default-features --bin pi-rpc-check",
     "test:context": "node scripts/native.mjs cargo run --manifest-path src-tauri/Cargo.toml --no-default-features --bin pi-workspace-check",
     "test:agent:contract": "node tests/agent-contract.mjs",

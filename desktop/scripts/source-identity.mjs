@@ -5,12 +5,16 @@ import { lstat, readFile } from 'node:fs/promises';
 import path from 'node:path';
 
 const exec = promisify(execFile);
-export async function sourceIdentity(root) {
-  const git = async args => (await exec('git', args, { cwd: root, windowsHide: true, maxBuffer: 16 * 1024 * 1024 })).stdout;
-  const commit = (await git(['rev-parse', 'HEAD'])).trim();
-  const dirty = Boolean((await git(['status', '--porcelain', '--untracked-files=all'])).trim());
-  const names = [...new Set((await git(['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', '.'])).split('\0'))]
+const git = async (root, args) => (await exec('git', args, { cwd: root, windowsHide: true, maxBuffer: 16 * 1024 * 1024 })).stdout;
+// Files that determine the shipped program; shared by release staging and UI capture freshness checks.
+export async function identityFiles(root) {
+  return [...new Set((await git(root, ['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', '.'])).split('\0'))]
     .filter(name => name && !/^(docs\/|tests\/|README\.md$|VERIFICATION\.md$)/.test(name)).sort();
+}
+export async function sourceIdentity(root) {
+  const commit = (await git(root, ['rev-parse', 'HEAD'])).trim();
+  const dirty = Boolean((await git(root, ['status', '--porcelain', '--untracked-files=all'])).trim());
+  const names = await identityFiles(root);
   const hash = createHash('sha256');
   let files = 0;
   for (const name of names) {
