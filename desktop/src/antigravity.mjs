@@ -17,4 +17,11 @@ export function applyAntigravity(previous, next) {
 export function acpOptions(option) {
   return (option?.options || []).flatMap(item => item.options ? acpOptions(item) : typeof item.value === 'string' ? [item] : []);
 }
+export function acpModelWindow(modelId) {
+  const id = String(modelId || '').toLowerCase();
+  if (!id || id.includes('fixture')) return 0;
+  if (id.startsWith('gemini-')) return 1000000;
+  if (id.startsWith('gpt-')) return 128000;
+  return 200000;
+}
 export const acpDraftKey = state => `antigravity-draft:${state.cwd}:${state.sessionId || 'new'}`;

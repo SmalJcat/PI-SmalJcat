@@ -18,8 +18,11 @@
 :root .composer-area .composer-options { gap: 12px; min-width: 0; }
 :root .composer-area .composer-access { display: inline-flex; align-items: center; gap: 6px; padding: 7px 0; color: var(--composer-access); font-size: var(--type-label, 13px); white-space: nowrap; }
 :root .composer-area .send-controls { gap: 10px; min-width: 0; }
-:root .composer-area .send-button { width: 40px; height: 40px; border-radius: 50%; background: var(--composer-blue); color: #fff; }
-:root .composer-area .send-button:disabled { background: var(--composer-blue); color: #fff; opacity: .45; }
+:root .composer-area .send-button { width: 40px; height: 40px; border-radius: 50%; background: #2563eb; color: #fff; }
+:root .composer-area .send-button:hover:not(:disabled) { background: #1d4ed8; }
+:root .composer-area .send-button:disabled { background: #2563eb; color: #fff; opacity: .45; }
+:root .composer-area .send-button.stop-mode { background: #2563eb; color: #fff; opacity: 1; }
+:root .composer-area .send-button.stop-mode:hover:not(:disabled) { background: #1d4ed8; }
 :root .composer-area .composer-reasoning-trigger { display: flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; padding: 8px 4px; border-radius: 8px; color: var(--text); background: transparent; font-size: var(--type-label, 13px); white-space: nowrap; }
 :root .composer-reasoning-trigger > svg { flex-shrink: 0; }
 :root .composer-current-model { overflow: hidden; text-overflow: ellipsis; max-width: 240px; }

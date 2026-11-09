@@ -326,7 +326,8 @@ impl Antigravity {
         json!({"revision":state.revision,"connected":state.connected,"connecting":state.connecting,"busy":state.busy,"cancelling":state.cancelling,"capabilities":state.capabilities,"error":state.error,"warning":state.warning,"pid":state.pid,"sessionId":state.conversation.session_id,"cwd":state.conversation.cwd,"configOptions":state.conversation.config_options,"agentInfo":state.agent_info,"permissionMode":state.permission_mode,"permissionRules":state.permission_rules,"permissionConfigError":state.permission_error,"contextUsage":state.conversation.context_usage,"permissions":state.permissions.iter().map(|(id,request)|json!({"id":id,"toolCall":request.params["toolCall"],"options":request.params["options"]})).collect::<Vec<_>>()})
     }
     pub fn status(&self) -> Value {
-        let state = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap();
+        sync_transcript_usage(&mut state.conversation);
         let mut value = Self::summary(&state);
         value["messages"] = json!(state.conversation.messages);
         value["tools"] = json!(state.conversation.tools);
@@ -680,6 +681,12 @@ impl Antigravity {
                         state.conversation.context_usage = Some(usage);
                     }
                 }
+                sync_transcript_usage(&mut state.conversation);
+                json!({})
+            });
+        } else {
+            self.change(|state| {
+                sync_transcript_usage(&mut state.conversation);
                 json!({})
             });
         }
@@ -912,6 +919,7 @@ impl Antigravity {
                 if let Err(error) = result {
                     state.error = format!("{error:#}");
                 }
+                sync_transcript_usage(&mut state.conversation);
                 json!({"settled":true})
             });
             owner.save().await;
@@ -1106,6 +1114,96 @@ fn model_id(conversation: &Conversation) -> &str {
         .and_then(|option| option["currentValue"].as_str())
         .unwrap_or_default()
 }
+fn default_model_window(model: &str) -> u64 {
+    let lower = model.to_ascii_lowercase();
+    if lower.starts_with("gemini-") {
+        1_000_000
+    } else if lower.starts_with("gpt-") {
+        128_000
+    } else {
+        200_000
+    }
+}
+fn parse_transcript_usage(text: &str, model: &str) -> Option<Value> {
+    for line in text.lines().rev() {
+        if !line.contains("PLANNER_RESPONSE") || !line.contains("input_tokens") {
+            continue;
+        }
+        let Ok(entry) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if entry["type"] != "PLANNER_RESPONSE" {
+            continue;
+        }
+        let Some(input) = entry["input_tokens"].as_u64() else {
+            continue;
+        };
+        let cache_read = entry["cache_read_tokens"].as_u64().unwrap_or(0);
+        let cache_write = entry["cache_write_tokens"].as_u64().unwrap_or(0);
+        let output = entry["output_tokens"].as_u64().unwrap_or(0);
+        let used = input
+            .saturating_add(cache_read)
+            .saturating_add(cache_write)
+            .saturating_add(output);
+        if used == 0 || used > 9_007_199_254_740_991 {
+            continue;
+        }
+        let size = default_model_window(model);
+        return Some(json!({
+            "used": used,
+            "size": size,
+            "stale": false,
+            "modelId": model,
+            "updatedAt": crate::context::now(),
+            "source": "transcript"
+        }));
+    }
+    None
+}
+fn read_transcript_usage(session_id: &str, model: &str) -> Option<Value> {
+    if session_id.is_empty()
+        || session_id.len() > 120
+        || !session_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+    {
+        return None;
+    }
+    let path = dirs::home_dir()?
+        .join(".gemini")
+        .join("antigravity-cli")
+        .join("brain")
+        .join(session_id)
+        .join(".system_generated")
+        .join("logs")
+        .join("transcript.jsonl");
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = std::fs::File::open(path).ok()?;
+    let len = file.metadata().ok()?.len();
+    if len == 0 {
+        return None;
+    }
+    let tail = 256 * 1024;
+    if len > tail {
+        file.seek(SeekFrom::End(-(tail as i64))).ok()?;
+    }
+    let mut bytes = Vec::with_capacity(len.min(tail) as usize);
+    file.read_to_end(&mut bytes).ok()?;
+    parse_transcript_usage(&String::from_utf8_lossy(&bytes), model)
+}
+fn sync_transcript_usage(conversation: &mut Conversation) {
+    let model = model_id(conversation).to_owned();
+    if conversation
+        .context_usage
+        .as_ref()
+        .is_some_and(|u| u["source"] == "acp" && u["modelId"] == model && u["stale"] == false)
+    {
+        return;
+    }
+    if let Some(usage) = read_transcript_usage(&conversation.session_id, &model) {
+        conversation.context_usage = Some(usage);
+    }
+}
 fn automatic_permission(state: &State, params: &Value) -> Option<(bool, Value)> {
     let call = &params["toolCall"];
     let kind = call["kind"].as_str().unwrap_or("other");
@@ -1225,7 +1323,7 @@ fn apply_update(conversation: &mut Conversation, update: &Value) -> Value {
             let mut reported = false;
             if let (Some(used), Some(size)) = (update["used"].as_u64(), update["size"].as_u64()) {
                 if size > 0 && size <= 9_007_199_254_740_991 && used <= 9_007_199_254_740_991 {
-                    let mut usage = json!({"used":used,"size":size,"stale":false,"modelId":model_id(conversation),"updatedAt":crate::context::now()});
+                    let mut usage = json!({"used":used,"size":size,"stale":false,"modelId":model_id(conversation),"updatedAt":crate::context::now(),"source":"acp"});
                     if let (Some(amount), Some(currency)) = (
                         update["cost"]["amount"]
                             .as_f64()
@@ -1314,6 +1412,7 @@ fn apply_update(conversation: &mut Conversation, update: &Value) -> Value {
             if fresh {
                 assistant(conversation)["content"].as_array_mut().unwrap().push(json!({"type":"toolCall","id":id,"name":tool["name"],"arguments":tool["args"]}));
             }
+            sync_transcript_usage(conversation);
             json!({"message":conversation.messages.last(),"tool":tool,"toolId":id})
         }
         "config_option_update" => {
@@ -1532,5 +1631,21 @@ mod tests {
         );
         assert_eq!(c.tools["read"]["status"], "done");
         assert_eq!(c.messages.len(), 1);
+    }
+    #[test]
+    fn transcript_usage_extracts_latest_planner_step_and_model_window() {
+        let log = concat!(
+            "{\"step_index\":1,\"type\":\"USER_INPUT\",\"content\":\"hi\"}\n",
+            "{\"step_index\":2,\"type\":\"PLANNER_RESPONSE\",\"input_tokens\":5200,\"cache_read_tokens\":100000,\"output_tokens\":300}\n",
+            "{\"step_index\":3,\"type\":\"TOOL_RESPONSE\",\"content\":\"ok\"}\n",
+            "{\"step_index\":4,\"type\":\"PLANNER_RESPONSE\",\"input_tokens\":12618,\"cache_read_tokens\":126037,\"output_tokens\":454}\n"
+        );
+        let gemini = parse_transcript_usage(log, "gemini-4-argon").unwrap();
+        assert_eq!(gemini["used"], 139109);
+        assert_eq!(gemini["size"], 1_000_000);
+        assert_eq!(gemini["source"], "transcript");
+        let claude = parse_transcript_usage(log, "claude-opus-5-5").unwrap();
+        assert_eq!(claude["used"], 139109);
+        assert_eq!(claude["size"], 200_000);
     }
 }

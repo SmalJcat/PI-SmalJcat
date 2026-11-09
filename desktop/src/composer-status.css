@@ -26,6 +26,8 @@
 :root .context-ring-track { opacity:.25; }
 :root .context-ring-value { transform:rotate(-90deg); transform-origin:center; stroke-linecap:round; }
 :root .context-card { padding:15px; }
+:root .context-card.compact { padding:12px 14px; }
+:root .context-card.compact p { margin:4px 0 0; color:var(--muted); font-size:12px; }
 :root .context-card .status-popover-heading { padding:0 0 10px; }
 :root .context-card-percent { display:block; font-size:16px; font-weight:500; }
 :root .context-card-percent > span { color:var(--muted); font-size:13px; }
