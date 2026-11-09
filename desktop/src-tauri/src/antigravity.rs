@@ -851,7 +851,20 @@ impl Antigravity {
         });
     }
     pub async fn prompt(self: &Arc<Self>, text: &str, images: &[Value]) -> Result<Value> {
+        self.prompt_for_session(text, images, None).await
+    }
+    pub async fn prompt_for_session(
+        self: &Arc<Self>,
+        text: &str,
+        images: &[Value],
+        expected_session: Option<&str>,
+    ) -> Result<Value> {
         let _operation = self.operation.lock().await;
+        if expected_session
+            .is_some_and(|expected| self.state.lock().unwrap().conversation.session_id != expected)
+        {
+            bail!("会话已切换，请重新选择要编辑的消息");
+        }
         if self.busy() {
             bail!("Antigravity 正在运行，请等待或停止后再发送");
         }

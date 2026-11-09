@@ -1,8 +1,14 @@
-# Pi Desktop 0.7.0 · Rust + Tauri
+# Pi Desktop 0.7.1 · Rust + Tauri
 
 为 Pi 1.5.0 构建的 Windows 桌面客户端。React / TypeScript 提供界面，Rust 管理 Pi RPC、进程、会话与本地文件，Tauri 2 使用系统 WebView2 显示窗口。
 
 生产版不再使用 Electron 或 Node.js。Pi 的模型、MCP、工具和扩展继续通过现有 `pi.exe` 运行。
+
+## 0.7.1 消息复制与编辑
+
+悬停用户消息可复制或编辑，键盘聚焦也会显示操作。助手回复保留复制入口。编辑时可保留或移除原消息图片，普通输入框的草稿、附件和文件引用独立保留。
+
+Pi 保存编辑后从原消息之前创建新分支并重新发送，原会话保留。Antigravity 使用“编辑为新消息”，在当前会话追加修改后的内容。
 
 ## 0.7.0 权限与上下文
 

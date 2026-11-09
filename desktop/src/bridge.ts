@@ -20,6 +20,7 @@ export async function initializeBridge() {
     bootstrap: () => call('bootstrap'),
     connect: options => call('connect', options),
     snapshot: () => call('snapshot'),
+    prepareMessageEdit: options => call('prepare-message-edit',options),
     sessionAccess: path => call('session-access', { path }),
     mcpStatus: reconnect => call('mcp-status', { reconnect }),
     contextStatus: () => call('context-status'),

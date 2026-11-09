@@ -1,3 +1,4 @@
+import { MessageEditor } from './MessageEditor';
 import { PermissionControl, ContextControl, PiPermissionDialog, usePiPermissions, usePiContext } from './ComposerStatus';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowUp, ArrowDown, ArrowUpRight, Brain, Check, ChevronDown, ChevronRight, CircleAlert, Code2, FilePlus2, Folder, FolderOpen, GitBranch, Layers, LoaderCircle, Maximize2, MessageSquare, Minus, MoreHorizontal, PanelLeftClose, PanelRight, Paperclip, Plus, RefreshCw, Search, Settings2, Sparkles, Square, Terminal, X, Download, Plug, ShieldAlert } from './icons';
@@ -89,6 +90,7 @@ export default function App() {
   const [previewLine,setPreviewLine]=useState(1);
   const [cwd, setCwd] = useState('');
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
+  const [messageEdit,setMessageEdit] = useState<Wire|null>(null);
   const [transcript, setTranscript] = useState<Wire>(emptyTranscript());
   const [connection, setConnection] = useState<'connecting' | 'ready' | 'error'>('connecting');
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -274,6 +276,11 @@ export default function App() {
       const next = await window.pi.connect(options);
       generation.current = next.generation;
       setCwd(next.cwd); setSnapshot(next); setTranscript(loadTranscript(next.messages, next.state.isStreaming || next.state.isCompacting));
+      if (preserveDraft && options.sessionPath) {
+        setMessageEdit(current => current && samePath(current.sessionPath, options.sessionPath)
+          ? {...current, sessionPath:next.state.sessionFile, sessionId:next.state.sessionId, preparedSessionId:current.preparedSessionId ? next.state.sessionId : undefined}
+          : current);
+      }
       if(!preserveDraft){setDraft(readDraft(draftKey(next.cwd,next.state)));setAttachments([]);setReferences([]);}
       setShowAllMessages(false);setConflict(null);setRecovery(null);
       setConnection('ready'); setStatus(''); setFollowing(true);
@@ -494,6 +501,28 @@ export default function App() {
       if(errorText(error).includes('SESSION_CHANGED:')&&state.sessionFile)setConflict({path:state.sessionFile,reason:errorText(error)});
     } finally { setSubmitting(false); editor.current?.focus(); }
   };
+  const submitMessageEdit = async (text:string, images:Wire[]) => {
+    if (!messageEdit || !ready || locked) throw new Error('请等待当前任务结束后重试');
+    if (images.length && !state.model?.input?.includes('image')) throw new Error('当前模型不支持图片，请移除图片或切换模型');
+    setActionPending(true); setNotice(null);
+    try {
+      let sessionId = messageEdit.preparedSessionId;
+      if (!sessionId) {
+        const result = await window.pi.prepareMessageEdit({sessionId:messageEdit.sessionId,entryId:messageEdit.message._entryId});
+        if (result.cancelled) return false;
+        const next = result.snapshot;
+        if (!next) throw new Error('Pi 未返回编辑分支');
+        generation.current = next.generation;
+        setSnapshot(next);setTranscript(loadTranscript(next.messages,next.state.isStreaming||next.state.isCompacting));
+        setMessageEdit(previous=>previous?{...previous,preparedSessionId:next.state.sessionId,sessionPath:next.state.sessionFile}:previous);
+        sessionId = next.state.sessionId;
+        void refreshSessions(next.cwd);
+      }
+      await window.pi.command('prompt',{message:text,...(images.length?{images}:{}),expectedSessionId:sessionId});
+      setMessageEdit(null);setFollowing(true);void refreshSessions(cwd);
+      return true;
+    } finally {setActionPending(false);}
+  };
   const stop = async () => {
     setActionPending(true);
     try {
@@ -578,7 +607,7 @@ export default function App() {
           { icon: <Code2 size={20} />, title: '了解这个项目', desc: '梳理结构，找到开始的地方', prompt: '请先只读查看当前项目，介绍它的用途、主要目录和推荐的运行方式。' },
           { icon: <Sparkles size={20} />, title: '实现一个想法', desc: '把想法变成能运行的代码', prompt: '我想在这个项目里实现一个功能：' },
           { icon: <GitBranch size={20} />, title: '检查代码改动', desc: '找出问题，让改动更可靠', prompt: '请只读审查当前工作区的 Git 改动，重点指出真实缺陷、潜在回归和缺少的验证。' },
-        ].map(suggestion => <button key={suggestion.title} className="suggestion-card" onClick={() => { setDraft(suggestion.prompt); editor.current?.focus(); }}><strong>{suggestion.title}<ArrowUpRight size={15} /></strong></button>)}</div></div> : <div className="transcript">{visibleMessages.length > 100 && !showAllMessages && <button className="load-earlier" onClick={() => setShowAllMessages(true)}>显示更早的 {visibleMessages.length - 100} 条消息</button>}{displayedMessages.map((message: Wire) => <Message key={message._key} message={message} tools={transcript.tools} />)}{running && <div className="working-indicator"><span className="working-dots"><i /><i /><i /></span>{status || 'Pi 正在处理'}</div>}</div>}
+        ].map(suggestion => <button key={suggestion.title} className="suggestion-card" onClick={() => { setDraft(suggestion.prompt); editor.current?.focus(); }}><strong>{suggestion.title}<ArrowUpRight size={15} /></strong></button>)}</div></div> : <div className="transcript">{visibleMessages.length > 100 && !showAllMessages && <button className="load-earlier" onClick={() => setShowAllMessages(true)}>显示更早的 {visibleMessages.length - 100} 条消息</button>}{displayedMessages.map((message: Wire) => <Message key={message._key} message={message} tools={transcript.tools} editDisabled={locked||!ready||!message._entryId||!window.pi.prepareMessageEdit} onEdit={message=>setMessageEdit({message,sessionId:state.sessionId,sessionPath:state.sessionFile})} />)}{running && <div className="working-indicator"><span className="working-dots"><i /><i /><i /></span>{status || 'Pi 正在处理'}</div>}</div>}
       </div>
       <div className="composer-area">{recovery?.sessionPath&&<div className="recovery-banner"><ShieldAlert size={16}/><span>{recovery.interrupted?'上次任务被中断，可恢复已保存的会话。':'可继续上次保存的会话。'}</span><button disabled={locked} onClick={()=>void connect({sessionPath:recovery.sessionPath,preserveDraft:connection==='error'})}>恢复会话</button><button onClick={()=>setRecovery(null)} aria-label="忽略恢复提示"><X size={14}/></button></div>}{!following && visibleMessages.length > 0 && <button className="jump-bottom" onClick={() => setFollowing(true)}><ArrowDown size={14} />回到最新</button>}
         {hitTerms.length > 0 && (
@@ -613,9 +642,10 @@ export default function App() {
     {workspacePanel==='terminal'&&<LazyTerminalPanel cwd={cwd} onClose={()=>setWorkspacePanel(null)} onError={showError}/>}
 {workspacePanel==='context'&&<LazyContextPanel key={snapshot?.generation} onClose={()=>setWorkspacePanel(null)} onChanged={()=>void refreshSnapshot()}/>}
     {workspacePanel==='agents'&&<LazyAgentsPanel models={snapshot?.models||[]} ready={ready} cwd={cwd} mainBusy={locked} onClose={()=>setWorkspacePanel(null)} onReference={(text:string)=>{setDraft(current=>[current,text].filter(Boolean).join('\n\n'));setWorkspacePanel(null);editor.current?.focus();}} onOpenParent={(path:string)=>{setWorkspacePanel(null);void connect({sessionPath:path});}}/>}
-    {conflict&&<Modal title="会话保护" onClose={()=>setConflict(null)}><div className="modal-body"><p className="dialog-message">{conflict.reason}</p><code className="conflict-path">{conflict.path}</code><p className="setting-help">复制会保留已保存的历史，并在新的会话文件中继续。</p><div className="modal-actions"><button className="secondary-button" onClick={()=>setConflict(null)}>取消</button><button className="primary-button" onClick={()=>void connect({sessionPath:conflict.path,fork:true,preserveDraft:true})}>复制为新会话</button></div></div></Modal>}
     {renameValue !== null && <Modal title="重命名会话" onClose={() => setRenameValue(null)}><form className="modal-body" onSubmit={e => { e.preventDefault(); if (renameValue.trim()) { void change('set_session_name', { name: renameValue.trim() }); setRenameValue(null); } }}><input className="dialog-input" autoFocus aria-label="会话名称" value={renameValue} onChange={e => setRenameValue(e.target.value)} /><div className="modal-actions"><button className="primary-button" disabled={!renameValue.trim()} type="submit">保存名称</button></div></form></Modal>}
     {piPermissions.policy.requests[0] && !dialogs.length && !acpStatus.permissions && <PiPermissionDialog key={piPermissions.policy.requests[0].id} request={piPermissions.policy.requests[0]} onReply={piPermissions.reply} onStop={()=>piPermissions.stop(piPermissions.policy.requests[0])}/>}
+    {messageEdit&&<MessageEditor key={messageEdit.message._key} message={messageEdit.message} prepared={!!messageEdit.preparedSessionId} disabled={!ready||locked} onSubmit={submitMessageEdit} onReconnect={connection==='error'?async()=>{await connect({sessionPath:messageEdit.sessionPath,preserveDraft:true});}:undefined} onClose={()=>setMessageEdit(null)}/>}
+    {conflict&&<Modal title="会话保护" onClose={()=>setConflict(null)}><div className="modal-body"><p className="dialog-message">{conflict.reason}</p><code className="conflict-path">{conflict.path}</code><p className="setting-help">复制会保留已保存的历史，并在新的会话文件中继续。</p><div className="modal-actions"><button className="secondary-button" onClick={()=>setConflict(null)}>取消</button><button className="primary-button" onClick={()=>void connect({sessionPath:conflict.path,fork:true,preserveDraft:true})}>复制为新会话</button></div></div></Modal>}
     {dialogs[0] && <ExtensionDialog key={dialogs[0].id} request={dialogs[0]} onError={showError} respond={async response => { await window.pi.respond(response); setDialogs(ds => ds.filter(d => d.id !== response.id)); }} />}
   </div>;
 }

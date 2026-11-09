@@ -62,6 +62,7 @@ export interface PiApi {
   review(relative: string, stage: 'working' | 'staged'): Promise<Wire>;
   openEditor(relative: string, line?: number): Promise<void>;
   snapshot(): Promise<Snapshot>;
+  prepareMessageEdit(options: {sessionId:string;entryId:string}): Promise<{cancelled:boolean;snapshot?:Snapshot;text?:string}>;
   sessions(cwd?: string): Promise<Session[]>;
   chooseWorkspace(): Promise<string | null>;
   chooseExecutable(): Promise<Preferences | null>;

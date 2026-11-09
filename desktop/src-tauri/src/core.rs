@@ -650,6 +650,83 @@ impl Core {
         let _gate = self.operation.lock().await;
         self.snapshot_active(&self.current().await?).await
     }
+    pub async fn prepare_message_edit(&self, session_id: &str, entry_id: &str) -> Result<Value> {
+        let _operation = self.operation.try_lock().context("上一个操作仍在处理中")?;
+        let active = self.current().await?;
+        let state = active.rpc.call("get_state", json!({})).await?;
+        if state["sessionId"] != session_id {
+            bail!("会话已切换，请重新选择要编辑的消息");
+        }
+        if active.rpc.busy.load(Ordering::SeqCst)
+            || state["isStreaming"] == true
+            || state["isCompacting"] == true
+            || state["pendingMessageCount"].as_u64().unwrap_or_default() > 0
+        {
+            bail!("请先停止当前任务再编辑消息");
+        }
+        {
+            let _launch = self.agents.launch_lock.lock().await;
+            let guard = self.guard.lock().unwrap();
+            guard
+                .as_ref()
+                .context("当前会话未保存，无法编辑历史消息")?
+                .validate_with_managed(active.rpc.pid, &self.agents.pids())?;
+        }
+        let candidates = active.rpc.call("get_fork_messages", json!({})).await?;
+        if !candidates["messages"].as_array().is_some_and(|messages| {
+            messages
+                .iter()
+                .any(|message| message["entryId"] == entry_id)
+        }) {
+            bail!("该消息已不在当前会话分支中，请刷新后重新选择");
+        }
+        let result = async {
+            let forked = active.rpc.call("fork", json!({"entryId":entry_id})).await?;
+            if forked["cancelled"] == true {
+                return Ok(json!({"cancelled":true}));
+            }
+            *self.context_usage_cache.lock().unwrap() = None;
+            let snapshot = self.snapshot_active(&active).await?;
+            let file = PathBuf::from(
+                snapshot["state"]["sessionFile"]
+                    .as_str()
+                    .context("Pi 未返回分支会话路径")?,
+            );
+            let same = self.guard.lock().unwrap().as_ref().is_some_and(|guard| {
+                session_guard::key(&guard.path).ok() == session_guard::key(&file).ok()
+            });
+            if same {
+                if let Some(guard) = self.guard.lock().unwrap().as_mut() {
+                    guard.baseline = session_guard::stamp(&file)?;
+                    guard.expecting_write = false;
+                }
+            } else {
+                let lease = session_guard::acquire(&self.lease_root(), &file)?;
+                *self.guard.lock().unwrap() = Some(SessionGuard {
+                    path: file.clone(),
+                    lease,
+                    baseline: session_guard::stamp(&file)?,
+                    known_processes: session_guard::pi_processes()?,
+                    expecting_write: false,
+                });
+            }
+            self.save_recovery(json!({"sessionPath":file,"cwd":active.cwd,"interrupted":false}));
+            Ok::<Value, anyhow::Error>(
+                json!({"cancelled":false,"snapshot":snapshot,"text":forked["text"]}),
+            )
+        }
+        .await;
+        if result.is_err() {
+            active.rpc.stop().await;
+            self.active.write().await.take();
+            self.guard.lock().unwrap().take();
+            self.emit(
+                active.generation,
+                json!({"type":"transport_exit","message":"编辑分支准备失败，请重新连接原会话"}),
+            );
+        }
+        result
+    }
     pub async fn command(&self, kind: &str, mut data: Value) -> Result<Value> {
         if ![
             "prompt",
@@ -674,6 +751,15 @@ impl Core {
             Some(self.operation.try_lock().context("上一个操作仍在处理中")?)
         };
         let active = self.current().await?;
+        if let Some(expected) = data
+            .as_object_mut()
+            .and_then(|data| data.remove("expectedSessionId"))
+        {
+            let state = active.rpc.call("get_state", json!({})).await?;
+            if expected != state["sessionId"] {
+                bail!("会话已切换，消息保留在编辑框中");
+            }
+        }
         if kind != "prompt"
             && !["abort", "clear_queue"].contains(&kind)
             && active.rpc.busy.load(Ordering::SeqCst)

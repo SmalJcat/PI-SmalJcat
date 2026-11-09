@@ -97,6 +97,12 @@ async function permissionTool(command) {
   completeMessage(message('assistant',[{type:'text',text:allowed?'PERMISSION_ALLOWED':'PERMISSION_DENIED'}],{model:model.id,provider:model.provider,stopReason:'stop'}));
   active=false;emit({type:'agent_end',willRetry:false});emit({type:'agent_settled',aborted:false});
 }
+const activeEntries = () => {
+  const byId=new Map(entries.map(entry=>[entry.id,entry])), branch=[],seen=new Set();
+  let id=leafId;
+  while(id&&!seen.has(id)){seen.add(id);const entry=byId.get(id);if(!entry)break;branch.push(entry);id=entry.parentId;}
+  return branch.reverse();
+};
 const handle = command => {
   switch (command.type) {
     case 'get_state': {
@@ -105,6 +111,17 @@ const handle = command => {
       return respond(command, state);
     }
     case 'get_entries': return respond(command, { entries, leafId });
+    case 'get_fork_messages': return respond(command,{messages:activeEntries().filter(entry=>entry.type==='message'&&entry.message.role==='user').map(entry=>({entryId:entry.id,text:typeof entry.message.content==='string'?entry.message.content:entry.message.content.filter(block=>block.type==='text').map(block=>block.text).join('\n')}))});
+    case 'fork': {
+      const branch=activeEntries(), index=branch.findIndex(entry=>entry.id===command.entryId&&entry.type==='message'&&entry.message.role==='user');
+      if(index<0)return emit({type:'response',command:command.type,id:command.id,success:false,error:'fork target is not active'});
+      const target=branch[index].message;
+      const text=typeof target.content==='string'?target.content:target.content.filter(block=>block.type==='text').map(block=>block.text).join('\n');
+      if(text.includes('[fork-cancel]'))return respond(command,{cancelled:true});
+      entries=branch.slice(0,index);leafId=entries.at(-1)?.id||null;sessionId=randomUUID();sessionFile=path.join(sessionDir,sessionId+'.jsonl');persist();
+      return respond(command,{cancelled:false,text});
+    }
+
     case 'get_messages': return respond(command, { messages: entries.filter(e => e.type === 'message').map(e => e.message) });
     case 'get_available_models': return respond(command, { models });
     case 'get_available_thinking_levels': return respond(command, { levels: model.reasoning ? ['off', 'low', 'medium', 'high'] : ['off'] });
@@ -115,6 +132,8 @@ const handle = command => {
       return respond(command, { cost: usages.reduce((sum, usage) => sum + (usage.cost?.total || 0), 0), tokens: { input: total('input'), output: total('output'), cacheRead: total('cacheRead'), cacheWrite: total('cacheWrite'), total: total('totalTokens') }, contextUsage: { tokens: contextTokens, contextWindow: model.contextWindow, percent: contextTokens / model.contextWindow * 100 } });
     }
     case 'prompt': {
+      if(command.message.includes('[edit-send-fail]'))return emit({type:'response',command:command.type,id:command.id,success:false,error:'EDIT_SEND_REJECTED'});
+
       if(command.message==='/context-priority-test'){emit({type:'extension_ui_request',method:'notify',id:randomUUID(),notifyType:'info',message:'PI_DESKTOP_USAGE:'+JSON.stringify({usage:{tokens:10,contextWindow:model.contextWindow},modelKey:`${model.provider}/${model.id}`,estimated:true})});return respond(command,{disposition:'handled'});}
 
       if(command.message==='/permission-write-test'||command.message.includes('[child-permission]')) {void permissionTool(command);return;}

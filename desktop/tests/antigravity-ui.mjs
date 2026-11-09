@@ -1,4 +1,5 @@
 import {choosePermission} from './composer-status-ui.mjs';
+import { acpMessageChecks } from './message-actions-ui.mjs';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 
@@ -230,6 +231,7 @@ export async function antigravityChecks(page, artifacts, checks, waitForValue, w
   assert.equal(await page.evaluate(key => localStorage.getItem(key), `antigravity-draft:${state.cwd}:${id}`), '新建前的旧会话草稿');
   checks.push('断开后明确区分恢复会话与新会话；显式新建跳过旧会话并保留原草稿');
   state = await status(); const pid = state.pid;
+  await acpMessageChecks(page, panel, status, waitForValue, checks);
   await panel.getByRole('button', { name: '断开', exact: true }).click();
   await waitForValue(status, state => !state.connected && !state.pid);
   await waitForProcessExit(pid);

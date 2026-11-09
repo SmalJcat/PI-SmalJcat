@@ -1,4 +1,5 @@
 import {composerStatusChecks} from './composer-status-ui.mjs';
+import { piMessageChecks } from './message-actions-ui.mjs';
 import { antigravityChecks, officialAntigravityChecks } from './antigravity-ui.mjs';
 import { composerModelChecks } from './composer-model-ui.mjs';
 import { overflowChecks } from './overflow-ui.mjs';
@@ -505,6 +506,7 @@ try {
     checks.push('应用崩溃后 Job 清理 Pi/ACP 子进程、重启恢复探子子会话');
     await scoutHistoryChecks(page, artifacts, checks, waitForValue);
     await overflowChecks(page, artifacts, checks);
+    await piMessageChecks(page, artifacts, checks, waitForValue);
     await antigravityChecks(page, artifacts, checks, waitForValue, waitForProcessExit);
     const rejected = await page.evaluate(async () => {
       try { await window.pi.command('bash', { command: 'echo forbidden' }); return false; } catch { return true; }

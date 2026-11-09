@@ -147,6 +147,11 @@ async fn handshake_stream_config_cache_resume_and_shutdown() {
     );
     manager.session(None).await.unwrap();
     assert!(manager.status()["messages"].as_array().unwrap().is_empty());
+    assert!(manager
+        .prompt_for_session("stale edit must stay local", &[], Some(&id))
+        .await
+        .is_err());
+    assert!(manager.status()["messages"].as_array().unwrap().is_empty());
     manager.session(Some(&id)).await.unwrap();
     assert_eq!(manager.status()["messages"], complete["messages"]);
     assert!(manager.session(Some("../outside")).await.is_err());

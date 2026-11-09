@@ -7,6 +7,7 @@ import type { FileEntry, Wire } from './types';
 import { textContent } from './transcript.mjs';
 import { CodeBlock } from './ReviewPanel';
 import { parseLocalLink } from './workflows.mjs';
+import './message-actions.css';
 
 export function PiMark({ small = false }: { small?: boolean }) { return <span className={`pi-mark ${small ? 'small' : ''}`} aria-hidden="true">π</span>; }
 export function IconButton({ label, children, onClick, disabled, className = '' }: { label: string; children: ReactNode; onClick: () => void; disabled?: boolean; className?: string }) {
@@ -30,14 +31,22 @@ export function Modal({ title, children, onClose, wide = false, className = '' }
       }
     };
     document.addEventListener('keydown', key, true);
-    const timer = setTimeout(() => section.current?.querySelector<HTMLElement>('input, textarea, button')?.focus(), 20);
+    const timer = setTimeout(() => (section.current?.querySelector<HTMLElement>('[data-autofocus]') || section.current?.querySelector<HTMLElement>('input, textarea, button'))?.focus(), 20);
     return () => { document.removeEventListener('keydown', key, true); clearTimeout(timer);const top=Array.from(document.querySelectorAll('[role="dialog"][aria-modal="true"]')).at(-1);if(!top||previous&&top.contains(previous))previous?.focus(); };
   }, []);
   return <div className="modal-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}><section ref={section} className={`modal ${wide ? 'wide' : ''} ${className}`} role="dialog" aria-modal="true" aria-label={title}><header><h2>{title}</h2><IconButton label="关闭弹窗" onClick={onClose}><X size={18} /></IconButton></header>{children}</section></div>;
 }
-function CopyButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
-  return <button className="copy-button" title="复制" onClick={() => { void navigator.clipboard.writeText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1600); }); }}>{copied ? <Check size={14} /> : <Copy size={14} />}{copied ? '已复制' : '复制'}</button>;
+function CopyButton({ text, iconOnly = false }: { text: string; iconOnly?:boolean }) {
+  const [status,setStatus] = useState('');
+  const timer = useRef<ReturnType<typeof setTimeout>|null>(null);
+  useEffect(()=>()=>{if(timer.current)clearTimeout(timer.current);},[]);
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(text);setStatus('已复制'); }
+    catch { setStatus('复制失败，请重试'); }
+    if(timer.current)clearTimeout(timer.current);
+    timer.current=setTimeout(()=>setStatus(''),1600);
+  };
+  return <button type="button" className={`copy-button ${iconOnly?'message-action':''}`} data-message-action="copy" aria-label={iconOnly?'复制用户消息':'复制'} title={status||'复制'} onClick={()=>void copy()}>{status==='已复制'?<Check size={14}/>:status?<CircleAlert size={14}/>:<Copy size={14}/>}<span className={iconOnly?'message-copy-status':undefined} aria-live="polite">{status||(!iconOnly?'复制':'')}</span></button>;
 }
 export function RichText({ text, allowFileLinks = true }: { text: string; allowFileLinks?: boolean }) {
   return <div className="markdown"><Markdown remarkPlugins={[remarkGfm]} skipHtml components={{
@@ -56,7 +65,7 @@ export function ToolCard({ call, tool }: { call: Wire; tool?: Wire }) {
   const done = tool?.status === 'done', error = tool?.status === 'error';
   return <details className={`tool-card ${error ? 'tool-error' : ''}`} ref={card}><summary><span className="tool-icon">{error ? <CircleAlert size={15} /> : done ? <CheckCheck size={15} /> : tool?.status === 'running' ? <LoaderCircle size={15} className="spin" /> : <Terminal size={15} />}</span><span className="tool-name">{call.name || tool?.name}</span><span className="tool-target">{String(target).slice(0, 100)}</span><span className="tool-duration">{tool?.durationMs !== undefined ? `${(tool.durationMs / 1000).toFixed(1)}s` : ''}</span><ChevronRight className="disclosure" size={14} /></summary><div className="tool-body"><label>参数</label><pre>{JSON.stringify(args, null, 2)}</pre>{output && <><label>输出</label><pre>{output.slice(0, 40000)}{output.length > 40000 ? '\n…界面截取前 40,000 字符，完整结果已保存在会话中。' : ''}</pre></>}{!output && <p className="muted">{tool?.status === 'running' ? '正在执行…' : done ? '执行完成' : '等待执行结果'}</p>}</div></details>;
 }
-export function Message({ message, tools, agentName = 'Pi', allowFileLinks = true }: { message: Wire; tools: Record<string, Wire>; agentName?: string; allowFileLinks?: boolean }) {
+export function Message({ message, tools, agentName = 'Pi', allowFileLinks = true, onEdit, editDisabled, editLabel='编辑消息' }: { message: Wire; tools: Record<string, Wire>; agentName?: string; allowFileLinks?: boolean; onEdit?:(message:Wire)=>void;editDisabled?:boolean;editLabel?:string }) {
   if (message.role === 'system' || message.role === 'toolResult' || message.display === false) return null;
   const user = message.role === 'user';
   if (message.role === 'compactionSummary' || message.role === 'branchSummary') return <details className="context-summary"><summary><Brain size={14} />{message.role === 'compactionSummary' ? '上下文已压缩 · 查看摘要' : '分支摘要'}</summary><RichText text={message.summary || ''} /></details>;
@@ -73,7 +82,7 @@ export function Message({ message, tools, agentName = 'Pi', allowFileLinks = tru
       if (block.type === 'image' && /^image\/(png|jpeg|gif|webp)$/.test(block.mimeType)) return <img className="message-image" key={index} src={`data:${block.mimeType};base64,${block.data}`} alt="会话附件" />;
       return null;
     })}{message.errorMessage && <div className="inline-error"><CircleAlert size={16} /><span>{message.errorMessage}</span></div>}{message.stopReason === 'aborted' && <span className="message-note">已停止</span>}</div>
-    {!user && textContent(message.content) && <div className="message-actions"><CopyButton text={textContent(message.content)} /></div>}
+    {(textContent(message.content)||user&&onEdit)&&<div className="message-actions">{textContent(message.content)&&<CopyButton text={textContent(message.content)} iconOnly={user}/>} {user&&onEdit&&<button type="button" className="message-action" aria-label={editLabel} title={editLabel} disabled={editDisabled} onClick={()=>onEdit(message)}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><path d="m16 3 5 5-12 12-6 1 1-6L16 3Z"/><path d="m13 6 5 5"/></svg></button>}</div>}
   </article>;
 }
 export function FileTree({ entries, onOpen, onError, depth = 0 }: { entries: FileEntry[]; onOpen: (path: string) => void; onError: (error: unknown) => void; depth?: number }) {

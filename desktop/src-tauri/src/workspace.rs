@@ -201,7 +201,7 @@ pub fn branch_messages(entries: &[Value], leaf: Option<&str>) -> Vec<Value> {
     }
     branch.reverse();
     branch.iter().filter_map(|entry| match entry["type"].as_str().unwrap_or_default() {
-        "message" => Some(entry["message"].clone()),
+        "message" if entry["message"].is_object() => { let mut message=entry["message"].clone(); message["_entryId"]=entry["id"].clone(); Some(message) },
         "custom_message" => { let mut result = (*entry).clone(); result["role"] = "custom".into(); Some(result) },
         "compaction" | "branch_summary" => Some(json!({"role": if entry["type"] == "compaction" {"compactionSummary"} else {"branchSummary"}, "summary":entry["summary"], "timestamp": entry["timestamp"].as_str().and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok()).map(|d| d.timestamp_millis())})),
         _ => None,

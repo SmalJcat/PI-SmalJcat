@@ -214,7 +214,11 @@ async fn dispatch(
                         payload.get("images").cloned().unwrap_or_else(|| json!([])),
                     )?;
                     antigravity
-                        .prompt(payload["text"].as_str().unwrap_or_default(), &images)
+                        .prompt_for_session(
+                            payload["text"].as_str().unwrap_or_default(),
+                            &images,
+                            payload["expectedSessionId"].as_str(),
+                        )
                         .await
                 }
                 "permission" => {
@@ -247,6 +251,13 @@ async fn dispatch(
                 .await
         }
         "context-status" => core.context_status().await,
+        "prepare-message-edit" => {
+            core.prepare_message_edit(
+                payload["sessionId"].as_str().context("缺少会话 ID")?,
+                payload["entryId"].as_str().context("缺少消息 ID")?,
+            )
+            .await
+        }
         "context-usage" => core.context_usage().await,
         "permissions" => core.permission_action(payload).await,
         "context-settings" => core.configure_context(payload).await,
