@@ -7,6 +7,9 @@
 - WebView2 62 项检查通过，渲染错误 0。新增用户与助手复制、剪贴板拒绝反馈、编辑取消、图片保留、原历史保留、独立草稿/附件保留、发送失败重试复用分支、断线后的保护流程与编辑恢复，以及 ACP 编辑为新消息。
 - 剪贴板写入检查使用浏览器 mock。Pi / ACP 发送检查使用隔离夹具，模型请求 0。
 - 本轮证据保存在 `artifacts/v071-js.log`、`v071-rust.log`、`v071-clippy.log`、`v071-real-fork.log`、`v071-ui.log` 和 `tauri-ui-result.json`，界面截图为 `v071-message-actions.png`。
+- 正式包来自干净提交 `07eeb7546ff8417bd5b2e9223a8cede79ce38011`，132 个范围内文件的源码指纹为 `a6ff5f496b2fb42b9ff4e744875529a3c74ec0dc5548d3b912e2e4fd590a888c`。程序 17,725,952 字节，产品版本 0.7.1，SHA-256 为 `8d280bd6ae598508cc9cf0834152b9d6f8e1878b99ec7c65f0059bfa7a444ecd`。
+- 正式程序完成 6 项真实 Pi / 官方 ACP 检查，模型请求 0。验收程序哈希与交付程序一致，证据为 `artifacts/v071-release-ui.log` 和 `tauri-release-result.json`。
+- 17:08 HKT 已部署至 `%LOCALAPPDATA%\Programs\Pi Desktop\fdea6c4` 与 `D:\PI\desktop\release\tauri`，版本与哈希相同。桌面快捷方式指向已更新的安装目录。原发布分别保留在 `fdea6c4.backup-2026-11-09T09-08-06-524Z-d2a0134c` 和 `tauri.backup-2026-11-09T09-08-06-960Z-81de43a9`。
 
 ## 0.7.0 全界面自动截图审计与 UI 细节收口（2026-11-09）
 
