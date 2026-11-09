@@ -98,7 +98,7 @@ export function AgentsPanel({ models, ready, cwd, onClose, onReference, onOpenPa
   const isActive = detail && activeStatuses.includes(detail.status);
   const output = full ? full.text : [detail?.output, detail?.partial].filter(Boolean).join('\n\n');
   return <Modal title="子代理工作台" wide onClose={onClose}><div className="workspace-panel agents-panel">
-    <div className="workspace-panel-heading"><div className="agents-capacity">{data.active || 0} 个运行中 · 最多 {data.concurrency} 个并行{(worktrees.worktrees || []).length > 1 && <span> · {(worktrees.worktrees || []).length - 1} 个工作树</span>}</div><button className="primary-button" onClick={() => setCreating(true)}>新任务</button></div>
+    <div className="workspace-panel-heading"><div className="agents-capacity">{data.active || 0} 个运行中 · 最多 {data.concurrency} 个并行{(worktrees.worktrees || []).length > 1 && <span> · {(worktrees.worktrees || []).length - 1} 个工作树</span>}</div><button className="primary-button" disabled={creating} onClick={() => setCreating(true)}>新任务</button></div>
     {error && <div role="alert" className="notice error">{error}</div>}{data.warnings?.map((warning: string, index: number) => <div className="notice error" key={index}>{warning}</div>)}
     <div className="agents-layout"><aside className="agent-task-sidebar"><div className="task-list-filters">
       <input type="search" aria-label="搜索探子任务" placeholder="搜索任务" maxLength={256} value={options.query} onChange={e => changeFilter({ query: e.target.value })} />

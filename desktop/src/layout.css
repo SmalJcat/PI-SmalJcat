@@ -89,16 +89,19 @@
 :root .agents-panel .agent-create .primary-button { width: auto; }
 :root .agents-panel .agent-create-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px; }
 :root .agents-panel .agent-create-header h4 { margin: 0; font-size: var(--type-title, 16px); }
-:root .agents-panel .agent-role-line { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 12px 0; }
+:root .agents-panel .agent-role-line { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; margin: 12px 0; }
 :root .agents-panel .agent-role-line label { margin: 0; flex: 1; min-width: 180px; }
-:root .agents-panel .agent-role-note { color: var(--muted); font-size: var(--type-meta, 12px); }
+:root .agents-panel .agent-role-note { display: inline-flex; align-items: center; min-height: 35px; padding: 6px 12px; border: 1px solid var(--surface-elevated-secondary, var(--border)); border-radius: 8px; background: var(--surface); color: var(--muted); font-size: var(--type-meta, 12px); white-space: nowrap; }
 :root .agents-panel .agent-advanced-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 :root .agents-panel .task-output { max-height: none; font: var(--type-code, 13px)/1.8 var(--font-code, Consolas, monospace); }
 :root .agents-panel .task-detail-empty { min-height: 220px; height: 100%; }
 :root .agents-panel .task-output-toolbar { gap: 12px; flex-wrap: wrap; }
 :root .agents-panel .task-record-meta { font-size: var(--type-micro, 11px); }
-:root .modal .context-meter progress::-webkit-progress-value { background: var(--accent); }
-:root .modal .context-meter > span { background: var(--text); }
+:root .modal .context-meter { height: 8px; }
+:root .modal .context-meter progress { height: 8px; border-radius: 99px; background: var(--surface-elevated-secondary, var(--border)); }
+:root .modal .context-meter progress::-webkit-progress-bar { background: var(--surface-elevated-secondary, var(--border)); border-radius: 99px; }
+:root .modal .context-meter progress::-webkit-progress-value { background: var(--composer-blue, var(--accent)); border-radius: 99px; }
+:root .modal .context-meter > span { top: -3px; width: 2px; height: 14px; border-radius: 1px; background: var(--composer-access, var(--text)); box-shadow: 0 0 0 1px var(--surface-raised); }
 
 :root .modal .settings-nav-group { padding: 12px 0 4px; }
 :root .modal .settings-split { display: grid; grid-template-columns: 168px minmax(0, 1fr); padding: 0; min-height: 0; height: min(680px, calc(100vh - 140px)); overflow: hidden; }
@@ -114,9 +117,9 @@
 :root .modal .settings-content .setting-path code { overflow-wrap: anywhere; min-width: 0; }
 :root .modal .settings-content .update-card { padding: 16px; }
 :root .modal .pref-toggle .pref-hint { max-width: 36em; }
-:root .modal .mcp-scope-tabs { display: flex; gap: 6px; margin-bottom: 16px; }
-:root .modal .mcp-scope-tabs button { padding: 8px 14px; border-radius: 8px; font-size: var(--type-label, 13px); }
-:root .modal .mcp-scope-tabs button[aria-selected=true] { background: var(--surface-raised); }
+:root .modal .mcp-scope-tabs { display: inline-flex; gap: 4px; padding: 3px; margin-bottom: 18px; border: 1px solid var(--surface-elevated-secondary, var(--border)); border-radius: 10px; background: var(--surface); }
+:root .modal .mcp-scope-tabs button { padding: 6px 14px; border-radius: 7px; font-size: var(--type-label, 13px); color: var(--muted); }
+:root .modal .mcp-scope-tabs button[aria-selected=true] { background: var(--surface-raised); color: var(--text); font-weight: 500; }
 :root .modal .mcp-panel { min-width: 0; }
 :root .modal .preview-toolbar { flex-wrap: wrap; gap: 10px; }
 :root .modal .preview-controls { flex-wrap: wrap; }

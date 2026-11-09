@@ -138,7 +138,7 @@ export function McpToolsPanel({ onError }: { onError: (error: unknown) => void }
               <div className="extension-meta">
                 <code>{server.command || server.url || '—'}</code>
                 {server.timeout ? <span>超时 {server.timeout}s</span> : null}
-                {server.exposure ? <span>exposure: {server.exposure}</span> : null}
+                {server.exposure ? <span>暴露方式：{({ direct: '直接暴露', deferred: '按需加载', local: '本地连接' } as Record<string, string>)[server.exposure] || server.exposure}</span> : null}
               </div>
               {serverWarnings(server, listing).map((warning: string) => (
                 <p key={warning} className="setting-help extension-error">{warning}</p>

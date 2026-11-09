@@ -22,7 +22,7 @@
 @media (prefers-reduced-motion: reduce) { .update-bar > span { transition: none; } }
 
 /* P1.1 扩展与签名卡片：与更新卡片同一视觉层级，权限按风险着色。 */
-.extensions-card .extensions-filter { flex: 1; min-width: 160px; border: 1px solid var(--border, #2a3947); background: transparent; color: inherit; border-radius: 7px; padding: 8px 10px; font-size: 11px; }
+.extensions-filter { flex: 1; min-width: 180px; border: 1px solid var(--surface-elevated-secondary, var(--border, #2a3947)); background: var(--surface, transparent); color: inherit; border-radius: 7px; padding: 8px 10px; font-size: 11px; }
 .extensions-list { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; max-height: 320px; overflow: auto; }
 .extension-row { border: 1px solid var(--border, #2a3947); border-radius: 8px; padding: 9px 11px; background: rgba(255, 255, 255, 0.02); display: flex; flex-direction: column; gap: 5px; }
 .extension-row.risk-high { border-left: 3px solid #ffb3af; }

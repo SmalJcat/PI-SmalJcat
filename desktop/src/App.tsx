@@ -197,6 +197,21 @@ export default function App() {
   const [preview, setPreview] = useState<Preview | null>(null);
   const [renameValue, setRenameValue] = useState<string | null>(null);
   const [more, setMore] = useState(false);
+  useEffect(() => {
+    if (!more) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (!(event.target as Element | null)?.closest('.menu-anchor')) setMore(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') { event.stopPropagation(); setMore(false); }
+    };
+    document.addEventListener('pointerdown', onPointerDown, true);
+    document.addEventListener('keydown', onKeyDown, true);
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown, true);
+      document.removeEventListener('keydown', onKeyDown, true);
+    };
+  }, [more]);
   const [dragging, setDragging] = useState(false);
   const [following, setFollowing] = useState(true);
   const [showAllMessages, setShowAllMessages] = useState(false);
