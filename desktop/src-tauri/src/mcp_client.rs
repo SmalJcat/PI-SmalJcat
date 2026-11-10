@@ -4,9 +4,10 @@
 //! 这里由桌面进程直接按 MCP 协议连接服务器，拿到结构化的工具清单并可以调用。
 //! 服务器定义沿用 Pi 的 mcp.json（mcpServers 结构），因此两边看到的是同一份配置。
 //!
-//! 传输：stdio 完整实现；Streamable HTTP 通过系统 curl.exe 完成请求/响应，
-//! 不引入新的第三方依赖。所有调用都有超时，子进程在断开或析构时被终止。
+//! 传输：stdio JSONL；Streamable HTTP 通过系统 curl.exe 管理会话与 SSE。
+//! 不引入新的第三方依赖。请求有超时，HTTP 通知流在断开或析构时终止。
 
+use crate::mcp_http::{HttpTransport, Notification};
 use crate::rpc::{hide_console, JsonLines};
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -275,13 +276,15 @@ pub fn find_server(agent_dir: &Path, name: &str) -> Result<ServerConfig> {
 
 // ---------------------------------------------------------------- 会话
 
-/// 一次已建立的 MCP 连接。stdio 会话持有子进程；HTTP 会话按请求结束后释放。
+/// 一次已建立的 MCP 连接；HTTP 保留会话标识和通知流。
 pub struct McpSession {
     pub name: String,
     transport: &'static str,
     /// (serverInfo, protocolVersion)：握手完成后写入。
     handshake: Mutex<(Value, String)>,
-    tools: AsyncMutex<Vec<Value>>,
+    tools: AsyncMutex<(u64, Vec<Value>)>,
+    tools_revision: Arc<AtomicU64>,
+    http: Option<Arc<HttpTransport>>,
     child: AsyncMutex<Option<Child>>,
     stdin: AsyncMutex<Option<ChildStdin>>,
     pending: Mutex<HashMap<u64, oneshot::Sender<Value>>>,
@@ -292,6 +295,9 @@ pub struct McpSession {
 
 impl Drop for McpSession {
     fn drop(&mut self) {
+        if let Some(http) = &self.http {
+            http.stop();
+        }
         // 尽力终止子进程：不依赖调用方记得断开。
         if let Ok(mut child) = self.child.try_lock() {
             if let Some(child) = child.as_mut() {
@@ -335,7 +341,9 @@ impl McpSession {
             name: config.name.clone(),
             transport: "stdio",
             handshake: Mutex::new((Value::Null, PROTOCOL_VERSION.to_owned())),
-            tools: AsyncMutex::new(Vec::new()),
+            tools: AsyncMutex::new((u64::MAX, Vec::new())),
+            tools_revision: Arc::new(AtomicU64::new(0)),
+            http: None,
             child: AsyncMutex::new(Some(child)),
             stdin: AsyncMutex::new(Some(stdin)),
             pending: Mutex::new(HashMap::new()),
@@ -391,6 +399,7 @@ impl McpSession {
         let dispatch_session = session.clone();
         tokio::spawn(async move {
             while let Some(message) = line_rx.recv().await {
+                dispatch_session.notification_handler()(message.clone());
                 if let Some(id) = message.get("id").and_then(|value| value.as_u64()) {
                     let waiter = dispatch_session.pending.lock().unwrap().remove(&id);
                     if let Some(waiter) = waiter {
@@ -445,11 +454,17 @@ impl McpSession {
     }
 
     async fn connect_http(config: ServerConfig) -> Result<Arc<Self>> {
+        let http = HttpTransport::new(
+            config.url.as_deref().context("缺少 url")?,
+            config.headers.clone(),
+        )?;
         let session = Arc::new(Self {
             name: config.name.clone(),
             transport: "http",
             handshake: Mutex::new((Value::Null, PROTOCOL_VERSION.to_owned())),
-            tools: AsyncMutex::new(Vec::new()),
+            tools: AsyncMutex::new((u64::MAX, Vec::new())),
+            tools_revision: Arc::new(AtomicU64::new(0)),
+            http: Some(http.clone()),
             child: AsyncMutex::new(None),
             stdin: AsyncMutex::new(None),
             pending: Mutex::new(HashMap::new()),
@@ -475,7 +490,30 @@ impl McpSession {
                 .unwrap_or(PROTOCOL_VERSION)
                 .to_owned(),
         );
+        http.set_protocol(&session.protocol())?;
+        http.post(
+            &json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
+            Duration::from_secs(HANDSHAKE_TIMEOUT_SECS),
+            &session.notification_handler(),
+        )
+        .await?;
+        http.listen(session.notification_handler());
         Ok(session)
+    }
+
+    fn notification_handler(&self) -> Notification {
+        let revision = self.tools_revision.clone();
+        Arc::new(move |message| {
+            if message.get("id").is_none()
+                && message["method"] == "notifications/tools/list_changed"
+            {
+                revision.fetch_add(1, Ordering::SeqCst);
+            }
+        })
+    }
+
+    fn connected(&self) -> bool {
+        self.http.as_ref().is_none_or(|http| http.connected())
     }
 
     fn take_id(&self) -> u64 {
@@ -485,14 +523,19 @@ impl McpSession {
     /// 发送请求并等待对应 id 的响应。
     pub async fn request(&self, method: &str, params: Value, timeout: Duration) -> Result<Value> {
         let id = self.take_id();
+        let payload = json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params });
+        if let Some(http) = &self.http {
+            let message = http
+                .post(&payload, timeout, &self.notification_handler())
+                .await?;
+            if let Some(error) = message.get("error") {
+                bail!("{}：{}", method, truncate(&error.to_string(), 400));
+            }
+            return Ok(message["result"].clone());
+        }
         let (tx, rx) = oneshot::channel();
         self.pending.lock().unwrap().insert(id, tx);
-        let payload = json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params });
-        let sent = if self.transport == "stdio" {
-            self.write_stdio(&payload).await
-        } else {
-            self.post_http(&payload, timeout).await
-        };
+        let sent = self.write_stdio(&payload).await;
         if let Err(error) = sent {
             self.pending.lock().unwrap().remove(&id);
             return Err(error);
@@ -526,54 +569,6 @@ impl McpSession {
         Ok(())
     }
 
-    /// HTTP 传输：一次请求一次 curl，响应直接派发给等待者。
-    async fn post_http(&self, payload: &Value, timeout: Duration) -> Result<()> {
-        let url = self.config.url.clone().context("缺少 url")?;
-        let body = serde_json::to_string(payload)?;
-        let mut command = Command::new(crate::update::curl_exe());
-        command
-            .args(["--location", "--silent", "--show-error", "--max-time"])
-            .arg(timeout.as_secs().to_string())
-            .args(["-H", "content-type: application/json"])
-            .args(["-H", "accept: application/json, text/event-stream"])
-            .args(["--data-binary", &body])
-            .arg(&url)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        for (key, value) in &self.config.headers {
-            command.args(["-H", &format!("{key}: {value}")]);
-        }
-        hide_console(&mut command);
-        let output = command.output().await.context("无法启动 curl.exe")?;
-        if !output.status.success() {
-            bail!(
-                "HTTP 请求失败：{}",
-                truncate(String::from_utf8_lossy(&output.stderr).trim(), 300)
-            );
-        }
-        let text = String::from_utf8_lossy(&output.stdout);
-        // 兼容 application/json 与 SSE（data: {...}）两种响应。
-        let message = text
-            .lines()
-            .filter_map(|line| {
-                let line = line.trim();
-                let candidate = line.strip_prefix("data:").unwrap_or(line).trim();
-                if candidate.is_empty() || !candidate.starts_with('{') {
-                    return None;
-                }
-                serde_json::from_str::<Value>(candidate).ok()
-            })
-            .next()
-            .with_context(|| format!("HTTP 响应不是 JSON-RPC：{}", truncate(text.trim(), 200)))?;
-        if let Some(id) = message.get("id").and_then(|value| value.as_u64()) {
-            if let Some(waiter) = self.pending.lock().unwrap().remove(&id) {
-                let _ = waiter.send(message);
-            }
-        }
-        Ok(())
-    }
-
     async fn notify(&self, method: &str, params: Value) {
         if self.transport != "stdio" {
             return;
@@ -598,10 +593,14 @@ impl McpSession {
 
     /// 发现工具；refresh 为 false 时使用缓存。
     pub async fn list_tools(&self, refresh: bool) -> Result<Vec<Value>> {
+        if !self.connected() {
+            bail!("MCP HTTP 会话已关闭或过期，请断开后重新连接");
+        }
+        let revision = self.tools_revision.load(Ordering::SeqCst);
         if !refresh {
             let cached = self.tools.lock().await;
-            if !cached.is_empty() {
-                return Ok(cached.clone());
+            if cached.0 == revision {
+                return Ok(cached.1.clone());
             }
         }
         let result = self
@@ -612,7 +611,7 @@ impl McpSession {
             .and_then(|value| value.as_array())
             .map(|values| values.iter().map(project_tool).collect())
             .unwrap_or_default();
-        *self.tools.lock().await = tools.clone();
+        *self.tools.lock().await = (revision, tools.clone());
         Ok(tools)
     }
 
@@ -630,7 +629,8 @@ impl McpSession {
 
     /// 关闭连接并等待子进程退出。
     pub async fn shutdown(&self) {
-        if self.transport != "stdio" {
+        if let Some(http) = &self.http {
+            http.shutdown().await;
             return;
         }
         {
@@ -650,10 +650,10 @@ impl McpSession {
         json!({
             "name": self.name,
             "transport": self.transport,
-            "connected": true,
+            "connected": self.connected(),
             "serverInfo": self.server_info(),
             "protocolVersion": self.protocol(),
-            "toolCount": self.tools.try_lock().map(|value| value.len()).unwrap_or(0),
+            "toolCount": self.tools.try_lock().map(|value| value.1.len()).unwrap_or(0),
         })
     }
 }
@@ -734,12 +734,12 @@ impl McpManager {
                 let name = server["name"].as_str().unwrap_or_default().to_owned();
                 match sessions.get(&name) {
                     Some(session) => {
-                        server["connected"] = json!(true);
+                        server["connected"] = json!(session.connected());
                         server["serverInfo"] = session.server_info();
                         server["toolCount"] = json!(session
                             .tools
                             .try_lock()
-                            .map(|value| value.len())
+                            .map(|value| value.1.len())
                             .unwrap_or(0));
                     }
                     None => {
@@ -749,20 +749,29 @@ impl McpManager {
                 }
             }
         }
-        listing["connectedCount"] = json!(sessions.len());
+        listing["connectedCount"] = json!(sessions
+            .values()
+            .filter(|session| session.connected())
+            .count());
         listing
     }
 
     async fn session(&self, name: &str) -> Result<Arc<McpSession>> {
-        if let Some(session) = self.sessions.lock().await.get(name) {
-            return Ok(session.clone());
+        // Serialize creation with disconnect: a completed disconnect must not be
+        // followed by an older handshake inserting a fresh live session.
+        let mut sessions = self.sessions.lock().await;
+        if let Some(session) = sessions.get(name) {
+            if session.connected() {
+                return Ok(session.clone());
+            }
+        }
+        // A new user action may reconnect; never replay the failed tool call.
+        if let Some(session) = sessions.remove(name) {
+            session.shutdown().await;
         }
         let config = find_server(&self.agent_dir, name)?;
         let session = McpSession::connect(config).await?;
-        self.sessions
-            .lock()
-            .await
-            .insert(name.to_owned(), session.clone());
+        sessions.insert(name.to_owned(), session.clone());
         Ok(session)
     }
 

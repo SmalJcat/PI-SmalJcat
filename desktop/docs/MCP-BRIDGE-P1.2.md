@@ -74,10 +74,21 @@ node scripts/native.mjs cargo test --manifest-path src-tauri/Cargo.toml --no-def
 
 它会读取真实的 `mcp.json`，连接指定服务器、列出工具并调用一个无副作用的工具（如 `binary_session`）。
 
+## 2026-11-10 HTTP 增量
+
+- 新增 `src-tauri/src/mcp_http.rs`：保存 `Mcp-Session-Id`，后续请求携带 `MCP-Protocol-Version`；初始化通知接收 202；无会话标识的无状态服务器也可使用。
+- POST 支持 JSON 与 SSE，按 ID 找到本次结果，处理多行 data、CRLF、UTF-8 和结果前通知；收到结果立即返回，不等待服务端结束 SSE。
+- GET 通知流自动重连（1–8 秒退避），携带 `Last-Event-ID`。GET/DELETE 的 405 表示不支持该可选能力。断流和恢复时使缓存失效，避免重连间隙漏通知。
+- 工具列表缓存以 revision 标记，空清单也缓存；收到 `notifications/tools/list_changed` 后下次查询重新读取，进行中的旧查询不会把新 revision 标为已缓存。stdio 同样接入此通知。
+- HTTP 会话过期 404 后显示未连接，不重放失败的工具调用；用户下一次显式连接/查询可以重新初始化。管理器串行处理建立连接与断开，代价是慢握手期间其他管理操作会等待（握手上限 30 秒）。
+- 正常断开尽力发送 DELETE，停止 GET 和进行中的 POST；超时或析构通过 `kill_on_drop` 清理 curl。URL、请求头及正文用 stdin 配置传递，不进入进程命令行；禁用 curlrc、URL globbing 和自动重定向。
+- 单行上限 1 MiB，单事件/JSON 正文上限 4 MiB，响应头上限 64 KiB；最终工具结果仍沿用 256 KiB 展示上限。配置中不得覆盖客户端管理的会话、协议、内容类型及传输头。
+- 回归入口：`node scripts/native.mjs cargo test --manifest-path src-tauri/Cargo.toml --no-default-features --test mcp_http`，使用本机 Node 启动 loopback 夹具；不读取用户 MCP 配置或调用模型。最新执行结果见 `../VERIFICATION.md`。
+
 ## 已知限制
 
-- HTTP 传输是**请求/响应**模型：不维持 SSE 长连接，也不处理服务端主动通知；会话 id（`mcp-session-id`）尚未在多次请求间复用。stdio 是完整实现。
-- 未处理 `notifications/tools/list_changed`：工具清单只在连接或显式刷新时更新。
+- 通知目前用于使工具缓存失效；已展开的工具面板仍通过“刷新工具”重新查询，不主动推送新清单到界面。
+- GET 的事件重放由服务器决定。客户端不重放断开的 POST/工具调用；不支持服务端发起的 sampling/elicitation 等请求、OAuth 或传统 HTTP+SSE 双端点。
 - 未做 MCP `resources` / `prompts`：本阶段只桥接 `tools`（与 DSH mcp-client 的取舍一致）。
 - 连接由桌面进程托管，不向 Pi 注入工具；要让 Pi 用上这些工具仍走 Pi 自己的 MCP 配置。
-- 尚无 MCP Apps 沙箱宿主（那是 P1.2 的下一步，需要独立 WebView + 白名单 API）。
+- MCP Apps 宿主已具备独立 WebView 与授权检查，但资源仍为 fixture；真实资源接入属于后续工作。

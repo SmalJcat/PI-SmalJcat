@@ -24,7 +24,7 @@
 ## 部分完成与边界
 
 - 扩展：只做 manifest / 签名 / 权限信息检查；不是插件安装或加载系统，不能阻止 Pi 自身加载未签名扩展。
-- MCP：桌面可连接 stdio / HTTP 服务并发现、调用工具；HTTP 尚不复用 MCP session id，不维持服务端通知流；尚无 resources/prompts 桥接。
+- MCP：桌面可连接 stdio / HTTP 服务并发现、调用工具；HTTP 复用会话 ID、发送初始化通知、读取 JSON/SSE 响应并维护 GET 通知流，工具列表变更使缓存失效；尚无 resources/prompts 桥接。
 - MCP Apps：独立 WebView、授权校验和审计已实现；资源仍来自 `fixture_catalog`，能力返回 `mock_result`，不是完整第三方 App 宿主。
 - 命令运行器不支持交互式 PTY；没有浏览器自动化、WebMCP 和 Office/LaTeX 工件系统。
 - 角色工具白名单与 worktree 不是 OS 沙箱。`verifier` 能执行 shell，不能把界面“不可修改文件”理解为操作系统强制只读。
@@ -135,9 +135,17 @@
 - Pi 费用使用已有会话费用（USD）；Antigravity 使用 CLI 上报的原币种费用，缺失速度或费用显示 `—`。窄窗口优先保留指标，隐藏发送快捷键提示；快捷键行为不变。
 - 修复悬停上下文卡片后移入内容仍自动消失。前端构建、JS 116 项、真实 WebView2 + fixture 64 项通过，渲染错误 0；已查看 1440/1024px 截图。第一次原生回归受并行探子新进程触发会话保护而中断，停止并行探查后完整复跑通过。
 
+## 2026-11-10：MCP HTTP 会话与通知
+
+- Streamable HTTP 保存初始化响应的会话 ID，并在后续 POST、GET、DELETE 携带会话头与协商协议版本。初始化成功后发送 `notifications/initialized`；无状态服务及 GET/DELETE 返回 405 均可兼容。
+- POST 按请求 ID 匹配 JSON 或 SSE 结果，支持多行 data、CRLF、UTF-8、通知先到及结果后连接仍保持。GET 持续接收通知，断流后退避重连并携带最后事件 ID；断流和重新建流均使工具缓存失效，防止未重放的变更遗漏。
+- `notifications/tools/list_changed` 使缓存失效，下次列工具时重新读取；没有自动刷新已展开面板。过期 404 取消该连接中的请求并显示未连接；失败的工具调用不重试，下一次显式操作可创建新会话。连接建立与断开串行，避免断开后旧握手重新插入。
+- curl 子进程在超时、断开、会话析构时终止；正常断开尽力 DELETE 会话。URL、认证头和正文通过 stdin 配置传递，关闭 URL globbing 和自动重定向；响应头、行、事件及 JSON 正文有大小上限。
+- 本轮只处理 tools 通道；resources/prompts、服务端请求（sampling/elicitation 等）、OAuth 及传统 HTTP+SSE 双端点仍未实现。GET 断流恢复依赖服务端是否支持事件重放，不自动重放 POST 或工具调用。
+
 ## 后续优先级
 
-1. MCP HTTP 会话与通知协议补齐，接真实资源，为 MCP Apps 移除 fixture 铺路。
+1. MCP resources/prompts 与真实资源接入，为 MCP Apps 移除 fixture 铺路。
 2. 插件安装/启停与加载前校验，明确与 Pi 原生扩展机制的责任边界。
 3. 交互式 PTY；加强可写/执行型代理的边界、工作树生命周期与审阅合并体验。
 4. 安装器和远端更新端到端验收；面向公开分发时再补代码签名。
