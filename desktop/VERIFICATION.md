@@ -8,7 +8,21 @@
 - 真实安装 Pi 的 `installed_pi_edit_contract_preserves_session_and_excludes_selected_message` 单独执行通过：同会话 ID/文件、旧分支保留、首条消息编辑、准备后断线重连与幂等重试。使用临时配置和会话，模型请求 0。
 - 18:50 HKT 真实 Tauri / WebView2 + 隔离 Pi/ACP fixture 完成 63 项检查，渲染错误 0、模型请求 0。新增仅图片编辑检查同时断言图片、会话 ID/文件、侧栏数量、普通草稿和旧历史均保留。回执 debug 程序 SHA-256：`5ef06219119226654e1e3feeb9e3530a86b94e900d226c287255ceddb667d15e`。
 - 已查看 `artifacts/sidebar/project-menu.png` 与 `artifacts/v071-message-actions.png`。日志为 `artifacts/closeout-web.log`、`closeout-rust.log`/`.stderr.log`、`closeout-ui.log`/`.stderr.log`、`closeout-real-edit.log`；回执为 `artifacts/sidebar/result.json` 和 `artifacts/tauri-ui-result.json`。浏览器剪贴板为 mock，资源管理器实际开窗未自动验证。
+- 18:58 HKT 正式包构建成功，来自干净提交 `0f1b9d806709b49cf4058404c797e8978c71f04e`；135 个范围内文件的源码指纹为 `0c6b6ce848a045aba0fb08ba12fe2b8b2285f386f28501f5cd2524856148ce4c`。程序 `release/tauri/Pi Desktop.exe` 为 17,751,040 字节，SHA-256 为 `f6511d169d8fb7acfa70f64ef724cb951eec3652f36ec8506ff64eb362f15ca2`。构建后用 `readRelease` 校验大小和实际文件哈希，并与 `sourceIdentity` 完整匹配，`dirty: false`。证据：`artifacts/closeout-package.log`/`.stderr.log`、`artifacts/closeout-release-integrity.json`。
+- 安装目录 `%LOCALAPPDATA%\Programs\Pi Desktop\fdea6c4` 已核验仍为此前 0.7.1 构建，实际 SHA-256 为 `e40ca1cb68ffd94b9ed6706d29f2c652f17b80ceb4b4904034a9752b33d4facc`；桌面和 `D:\PI\Pi Desktop.lnk` 均指向它。本轮新包尚未部署，未修改快捷方式或终止生产进程。
 - 生产独立启动验收尚未执行：本轮进程核查确认当前主代理 Pi 由已安装 Pi Desktop 承载。生产构建始终单实例，关闭现有桌面会终止当前对话；必须在桌面外部终端、完全退出旧实例后运行 `npm run test:release`。不能用上述 debug fixture 结果替代正式包验收。
+
+后续在独立 PowerShell 7 中完全退出 Pi Desktop 后执行；正式验收通过才部署，失败时保留现有安装：
+
+```powershell
+Set-Location 'D:\PI-SmalJcat\desktop'
+npm run test:release
+if ($LASTEXITCODE -eq 0) {
+    npm run deploy -- --to "$env:LOCALAPPDATA\Programs\Pi Desktop\fdea6c4"
+}
+```
+
+正式验收回执 `artifacts/tauri-release-result.json` 的 `success`、`mode`、执行时间及 `executableSha256` 应对应上面的本轮包。该命令验收仓库暂存 exe，部署后的安装路径启动仍需从快捷方式检查。
 
 ## 0.7.1 消息复制与编辑（2026-11-09）
 
