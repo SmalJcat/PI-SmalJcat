@@ -7,6 +7,8 @@
 - Rust 全量 `--no-default-features --features test-fixture` 165 项通过、4 项本机集成检查默认忽略；格式与全目标严格 Clippy 通过。新增 3 项解析单测和 8 项真实 loopback HTTP/curl 集成：会话头、初始化顺序、JSON/多行 SSE/UTF-8、通知缓存、Last-Event-ID 重连、无重放间隙变更、无状态/405、404 不重试、超时/断开/析构清理、错误正文/超限、字面 URL/转义凭据、并发连接与断开。
 - JavaScript 116 项、前端生产构建、原生 Tauri/WebView2 + fixture 64 项通过，渲染错误 0、模型请求 0。原生回执完成于 22:36 HKT，debug 程序 SHA-256 为 `91019a10fb9e9de5bc09c99a5d5fab7168fac1c1a7d5bbcdd188c370d30eadeb`。
 - 证据：`artifacts/mcp-http-rust.log`/`.stderr.log`、`mcp-http-js.log`、`mcp-http-ui.log`/`.stderr.log` 与 `tauri-ui-result.json`。HTTP 测试只启动临时 loopback 服务，不连接真实远程 MCP 或读取用户认证配置；远程 TLS/代理与服务器差异未作实测。
+- 22:40 HKT 正式包从干净提交 `6f57c22d7b193cf2801513c0586dbcb0b041ebf1` 构建并部署至 `%LOCALAPPDATA%\Programs\Pi Desktop\fdea6c4`。程序 17,845,248 字节，SHA-256 为 `c3bab6aafdca0a7eafc977ed4a6f6db6ed982e894745101a63049ced02c9cf85`；139 个范围内文件的源码指纹为 `040db1027704595078f4a97dc7ca7d631b384200e096ce7a79f721da4ce737e4`。安装与暂存程序/清单逐项一致，回执 `mcp-http-release-integrity.json`，构建/部署日志 `mcp-http-package.log`/`.stderr.log`、`mcp-http-deploy.log`。
+- 旧安装保留为 `fdea6c4.backup-2026-11-10T14-40-18-013Z-a2a9f4eb`；当前生产 PID 2664 保留，完全退出重开后加载新程序。正式包独立重启验收未运行，未把 fixture 验收当作生产重启验证；未生成新安装器。
 
 ## 0.7.1 精简上下文与底部统计（2026-11-10）
 
