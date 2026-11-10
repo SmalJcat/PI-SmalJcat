@@ -1,5 +1,14 @@
 # Pi Desktop 发布验收
 
+## 0.7.1 精简上下文与底部统计（2026-11-10）
+
+- 上下文卡片缩为百分比、用量/容量、进度条及压缩状态/设置；删除剩余统计、阈值和费用折叠区。费用移至输入框底部，同时显示 Pi 最近完整回复的平均输出速度；ACP 无可靠速度数据时显示 `—`。详情与测量口径见 `docs/DEVELOPMENT.md`。
+- 前端生产构建、JavaScript 116 项通过。原生 Tauri / WebView2 + fixture 64 项通过，渲染错误 0、模型请求 0；新增悬停移入保持、紧凑高度、速度/费用接线、ACP 原币种费用和 1440/1024px 底部无溢出检查。首次回归因并行探子新进程触发会话保护中断，停止并行探查后完整复跑通过。未修改 Rust，本轮未重跑 Rust 全量。
+- 已查看 `artifacts/compact-pi-context.png`、`composer-metrics-1440.png`、`composer-metrics-1024.png`；日志 `compact-build.log`、`compact-js.log`、`compact-ui-retry.log`/`.stderr.log`，回执 `tauri-ui-result.json`，完成于 20:14 HKT。
+- 正式包来自干净提交 `ca042e210273be072adadad778ee18de8f035c9d`；137 个范围内文件的源码指纹为 `7bb952b7a46d281b317bb916613c7f5d87024da2f0b3af546d89ce8cc40ab178`。程序 17,751,552 字节，SHA-256 为 `92d0d721a2a57c74ff0cfabf8e8f708e1c1c2072def0786869788949a83a8d07`。
+- 20:23 HKT 通过现有备份部署工具更新 `%LOCALAPPDATA%\Programs\Pi Desktop\fdea6c4`，旧版保留为 `fdea6c4.backup-2026-11-10T12-23-40-111Z-33e92f48`。安装程序大小/哈希与清单、仓库暂存包完整一致；证据 `artifacts/compact-deploy.log`、`compact-release-integrity.json`。当前生产进程 PID 7852 保留，完全退出后从原快捷方式重开才加载新界面。
+- 正式程序独立重启验收尚未运行，原因是当前宿主承载主代理对话且生产程序单实例；没有结束宿主或把 debug fixture 结果当作生产重启验证。未生成新的安装器。
+
 ## 0.7.1 项目侧栏与编辑收尾（2026-11-10）
 
 - 项目菜单、分区、会话归档/恢复及同会话编辑纳入本轮源码；修复触屏项目按钮被样式隐藏、仅保留图片的编辑发送失败，以及中文系统重复删除启动项误报。
