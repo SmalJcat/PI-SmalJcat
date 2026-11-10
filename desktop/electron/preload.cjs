@@ -17,7 +17,7 @@ contextBridge.exposeInMainWorld('pi', {
   attachments: paths => invoke('attachments', paths),
   chooseAttachments: () => invoke('choose-attachments'),
   pathForFile: file => webUtils.getPathForFile(file),
-  revealWorkspace: () => invoke('reveal-workspace'),
+  revealWorkspace: cwd => invoke('reveal-workspace', cwd),
   revealConfig: () => invoke('reveal-config'),
   openLink: url => invoke('open-link', url),
   exportSession: () => invoke('export'),

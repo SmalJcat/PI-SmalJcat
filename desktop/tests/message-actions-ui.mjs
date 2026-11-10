@@ -60,12 +60,17 @@ export async function piMessageChecks(page, artifacts, checks, waitForValue) {
   await dialog.getByRole('button', { name: '取消', exact: true }).click();
   assert.equal((await snapshot()).state.sessionId, before.state.sessionId);
   assert.equal(await input.inputValue(), '普通输入框草稿保留');
+  const sessionRows = page.locator('.session-item');
+  const rowsBefore = await sessionRows.count();
   await row.getByRole('button', { name: '编辑消息', exact: true }).click();
   await editor.fill('PI_EDIT_REVISED 你好🙂');
   await dialog.getByRole('button', { name: '保存并重新发送', exact: true }).click();
   await dialog.waitFor({ state: 'hidden' });
   const edited = await waitForValue(snapshot, value => !value.state.isStreaming && value.messages.some(message => JSON.stringify(message.content).includes('PI_EDIT_REVISED')));
-  assert.notEqual(edited.state.sessionId, before.state.sessionId);
+  assert.equal(edited.state.sessionId, before.state.sessionId);
+  assert.equal(edited.state.sessionFile, before.state.sessionFile);
+  assert.ok(rowsBefore > 0);
+  assert.equal(await sessionRows.count(), rowsBefore, 'Editing must not add sidebar sessions');
   assert.ok(!JSON.stringify(edited.messages).includes('PI_EDIT_ORIGINAL'));
   assert.ok((await readFile(before.state.sessionFile, 'utf8')).includes('PI_EDIT_ORIGINAL'));
   const changed = edited.messages.find(message => JSON.stringify(message.content).includes('PI_EDIT_REVISED'));
@@ -81,15 +86,32 @@ export async function piMessageChecks(page, artifacts, checks, waitForValue) {
   await dialog.getByRole('button', { name: '保存并重新发送', exact: true }).click();
   await dialog.getByRole('alert').filter({ hasText: 'EDIT_SEND_REJECTED' }).waitFor();
   const prepared = await snapshot();
-  assert.notEqual(prepared.state.sessionId, edited.state.sessionId);
+  assert.equal(prepared.state.sessionId, edited.state.sessionId);
+  assert.equal(prepared.state.sessionFile, edited.state.sessionFile);
+  assert.equal(await sessionRows.count(), rowsBefore);
   assert.equal(await editor.inputValue(), '[edit-send-fail]');
   await editor.fill('PI_EDIT_RETRY');
   await dialog.getByRole('button', { name: '保存并重新发送', exact: true }).click();
   await dialog.waitFor({ state: 'hidden' });
   const retried = await waitForValue(snapshot, value => !value.state.isStreaming && value.messages.some(message => JSON.stringify(message.content).includes('PI_EDIT_RETRY')));
   assert.equal(retried.state.sessionId, prepared.state.sessionId, 'Retry reuses the prepared branch');
+  assert.equal(await sessionRows.count(), rowsBefore);
   assert.equal(await input.inputValue(), '普通输入框草稿保留');
-  const retryRow = page.locator('.message.user').filter({ hasText: 'PI_EDIT_RETRY' });
+  const imageOnlyRow = page.locator('.message.user').filter({ hasText: 'PI_EDIT_RETRY' });
+  await imageOnlyRow.getByRole('button', { name: '编辑消息', exact: true }).click();
+  await editor.fill('   ');
+  await dialog.getByRole('button', { name: '保存并重新发送', exact: true }).click();
+  await dialog.waitFor({ state: 'hidden' });
+  const imageOnly = await waitForValue(snapshot, value => !value.state.isStreaming && value.messages.some(message => message.role === 'user' && textContent(message.content) === '请查看附件。'));
+  const imageOnlyMessage = imageOnly.messages.find(message => message.role === 'user' && textContent(message.content) === '请查看附件。');
+  assert.deepEqual(imageOnlyMessage.content.filter(block => block.type === 'image'), [image]);
+  assert.equal(imageOnly.state.sessionId, retried.state.sessionId);
+  assert.equal(imageOnly.state.sessionFile, retried.state.sessionFile);
+  assert.equal(await sessionRows.count(), rowsBefore);
+  assert.equal(await input.inputValue(), '普通输入框草稿保留');
+  assert.ok((await readFile(before.state.sessionFile, 'utf8')).includes('PI_EDIT_RETRY'));
+  checks.push('Pi 编辑清空文字后仅保留图片可重新发送，同会话、旧历史及独立草稿保留');
+  const retryRow = page.locator('.message.user').filter({ hasText: '请查看附件。' });
   await retryRow.getByRole('button', { name: '编辑消息', exact: true }).click();
   await editor.fill('断线后保留的编辑内容');
   await page.evaluate(() => window.pi.command('prompt', { message: '/crash-test' }));
@@ -111,7 +133,7 @@ export async function piMessageChecks(page, artifacts, checks, waitForValue) {
   await waitForValue(snapshot, value => !value.state.isStreaming && value.messages.some(message => JSON.stringify(message.content).includes('断线后保留的编辑内容')));
   await page.getByRole('button', { name: '移除 unsent.png', exact: true }).click();
   await input.fill('');
-  checks.push('Pi 用户消息和助手回复复制及失败反馈；编辑取消、保留图片与独立草稿、原历史分支保留、失败重试复用分支、断线重连保留编辑');
+  checks.push('Pi 用户消息和助手回复复制及失败反馈；编辑取消、同会话重发且侧栏不新增、保留图片与独立草稿、原历史分支保留、失败重试复用分支、断线重连保留编辑');
 }
 
 export async function acpMessageChecks(page, panel, status, waitForValue, checks) {

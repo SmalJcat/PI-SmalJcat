@@ -678,11 +678,64 @@ impl Core {
                 .iter()
                 .any(|message| message["entryId"] == entry_id)
         }) {
-            bail!("该消息已不在当前会话分支中，请刷新后重新选择");
+            // A previous preparation may have persisted before its response was lost.
+            // Only the latest non-metadata entry on the active branch authorizes a retry.
+            let history = active.rpc.call("get_entries", json!({})).await?;
+            let prepared = history["entries"].as_array().is_some_and(|entries| {
+                let by_id: HashMap<_, _> = entries
+                    .iter()
+                    .filter_map(|entry| entry["id"].as_str().map(|id| (id, entry)))
+                    .collect();
+                let mut current = history["leafId"].as_str();
+                let mut seen = HashSet::new();
+                while let Some(id) = current {
+                    if !seen.insert(id) {
+                        break;
+                    }
+                    let Some(entry) = by_id.get(id) else {
+                        break;
+                    };
+                    if !["model_change", "thinking_level_change", "session_info"]
+                        .contains(&entry["type"].as_str().unwrap_or_default())
+                    {
+                        return entry["type"] == "custom"
+                            && entry["customType"] == "desktop-message-edit"
+                            && entry["data"]["entryId"] == entry_id;
+                    }
+                    current = entry["parentId"].as_str();
+                }
+                false
+            });
+            if !prepared {
+                bail!("该消息已不在当前会话分支中，请刷新后重新选择");
+            }
         }
+        self.verify_context_bridge(&active).await?;
         let result = async {
-            let forked = active.rpc.call("fork", json!({"entryId":entry_id})).await?;
-            if forked["cancelled"] == true {
+            let nonce = uuid::Uuid::new_v4().to_string();
+            let prefix = format!("PI_DESKTOP_CONTEXT:{nonce}:");
+            let cursor = active.rpc.notification_cursor();
+            let payload = json!({"sessionId":session_id,"entryId":entry_id});
+            active
+                .rpc
+                .call(
+                    "prompt",
+                    json!({"message":format!("/desktop-context edit {nonce} {payload}")}),
+                )
+                .await?;
+            let response = active
+                .rpc
+                .notifications_after(cursor)
+                .iter()
+                .filter_map(|event| event["message"].as_str())
+                .find_map(|text| text.strip_prefix(&prefix))
+                .map(str::to_owned)
+                .context("Pi 未返回消息编辑结果")?;
+            let edited: Value = serde_json::from_str(&response)?;
+            if edited["ok"] != true {
+                bail!("{}", edited["error"].as_str().unwrap_or("无法准备消息编辑"));
+            }
+            if edited["cancelled"] == true {
                 return Ok(json!({"cancelled":true}));
             }
             *self.context_usage_cache.lock().unwrap() = None;
@@ -690,30 +743,19 @@ impl Core {
             let file = PathBuf::from(
                 snapshot["state"]["sessionFile"]
                     .as_str()
-                    .context("Pi 未返回分支会话路径")?,
+                    .context("Pi 未返回当前会话路径")?,
             );
-            let same = self.guard.lock().unwrap().as_ref().is_some_and(|guard| {
-                session_guard::key(&guard.path).ok() == session_guard::key(&file).ok()
-            });
-            if same {
-                if let Some(guard) = self.guard.lock().unwrap().as_mut() {
-                    guard.baseline = session_guard::stamp(&file)?;
-                    guard.expecting_write = false;
-                }
-            } else {
-                let lease = session_guard::acquire(&self.lease_root(), &file)?;
-                *self.guard.lock().unwrap() = Some(SessionGuard {
-                    path: file.clone(),
-                    lease,
-                    baseline: session_guard::stamp(&file)?,
-                    known_processes: session_guard::pi_processes()?,
-                    expecting_write: false,
-                });
+            if snapshot["state"]["sessionId"] != session_id
+                || snapshot["state"]["sessionFile"] != state["sessionFile"]
+            {
+                bail!("编辑消息时会话意外切换，请重新连接原会话");
+            }
+            if let Some(guard) = self.guard.lock().unwrap().as_mut() {
+                guard.baseline = session_guard::stamp(&file)?;
+                guard.expecting_write = false;
             }
             self.save_recovery(json!({"sessionPath":file,"cwd":active.cwd,"interrupted":false}));
-            Ok::<Value, anyhow::Error>(
-                json!({"cancelled":false,"snapshot":snapshot,"text":forked["text"]}),
-            )
+            Ok::<Value, anyhow::Error>(json!({"cancelled":false,"snapshot":snapshot}))
         }
         .await;
         if result.is_err() {
@@ -722,7 +764,7 @@ impl Core {
             self.guard.lock().unwrap().take();
             self.emit(
                 active.generation,
-                json!({"type":"transport_exit","message":"编辑分支准备失败，请重新连接原会话"}),
+                json!({"type":"transport_exit","message":"消息编辑准备失败，请重新连接原会话"}),
             );
         }
         result

@@ -77,7 +77,7 @@ export interface PiApi {
   chooseAttachments(): Promise<Attachment[]>;
   pathForFile(file: File): string;
   onFileDrop?(callback: (event: { type: string; paths?: string[] }) => void): () => void;
-  revealWorkspace(): Promise<string>;
+  revealWorkspace(cwd?: string): Promise<string>;
   revealConfig(): Promise<string>;
   openLink(url: string): Promise<void>;
   exportSession(): Promise<string | null>;

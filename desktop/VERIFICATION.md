@@ -1,5 +1,15 @@
 # Pi Desktop 发布验收
 
+## 0.7.1 项目侧栏与编辑收尾（2026-11-10）
+
+- 项目菜单、分区、会话归档/恢复及同会话编辑纳入本轮源码；修复触屏项目按钮被样式隐藏、仅保留图片的编辑发送失败，以及中文系统重复删除启动项误报。
+- `npm run build`、JavaScript 113 项、侧栏专项 18 类检查通过；触屏检查使用 `hasTouch` 并确认 `(hover: none)` 下按钮在未聚焦时可见、点击可打开菜单。
+- Rust `--no-default-features --features test-fixture` 全量 154 项通过、4 项显式集成检查默认忽略；`cargo fmt --check` 与全目标严格 Clippy 通过。原启动项失败已修复，既有注册/查询/重复删除回归及新增不存在路径/非法路径检查通过，没有跳过失败项。
+- 真实安装 Pi 的 `installed_pi_edit_contract_preserves_session_and_excludes_selected_message` 单独执行通过：同会话 ID/文件、旧分支保留、首条消息编辑、准备后断线重连与幂等重试。使用临时配置和会话，模型请求 0。
+- 18:50 HKT 真实 Tauri / WebView2 + 隔离 Pi/ACP fixture 完成 63 项检查，渲染错误 0、模型请求 0。新增仅图片编辑检查同时断言图片、会话 ID/文件、侧栏数量、普通草稿和旧历史均保留。回执 debug 程序 SHA-256：`5ef06219119226654e1e3feeb9e3530a86b94e900d226c287255ceddb667d15e`。
+- 已查看 `artifacts/sidebar/project-menu.png` 与 `artifacts/v071-message-actions.png`。日志为 `artifacts/closeout-web.log`、`closeout-rust.log`/`.stderr.log`、`closeout-ui.log`/`.stderr.log`、`closeout-real-edit.log`；回执为 `artifacts/sidebar/result.json` 和 `artifacts/tauri-ui-result.json`。浏览器剪贴板为 mock，资源管理器实际开窗未自动验证。
+- 生产独立启动验收尚未执行：本轮进程核查确认当前主代理 Pi 由已安装 Pi Desktop 承载。生产构建始终单实例，关闭现有桌面会终止当前对话；必须在桌面外部终端、完全退出旧实例后运行 `npm run test:release`。不能用上述 debug fixture 结果替代正式包验收。
+
 ## 0.7.1 消息复制与编辑（2026-11-09）
 
 - JavaScript 113 项通过，Rust `test-fixture` 153 项通过、4 项显式集成检查默认忽略。`cargo fmt --check` 与全目标严格 Clippy 通过。

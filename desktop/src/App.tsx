@@ -1,3 +1,4 @@
+import { Sidebar } from './Sidebar';
 import { MessageEditor } from './MessageEditor';
 import { PermissionControl, ContextControl, PiPermissionDialog, usePiPermissions, usePiContext } from './ComposerStatus';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -44,6 +45,7 @@ import './chatgpt-theme.css';
 import './typography.css';
 import './layout.css';
 import './composer.css';
+import './sidebar.css';
 import { PRESETS, applyStoredPreset, changePreset } from './ui-theme.mjs';
 import { applyStoredPreferences, updatePreference } from './preferences.mjs';
 import { assignBinding, matchBinding, readBindings, resetBindings, writeBindings } from './shortcuts.mjs';
@@ -95,7 +97,6 @@ export default function App() {
   const [connection, setConnection] = useState<'connecting' | 'ready' | 'error'>('connecting');
   const [sessions, setSessions] = useState<Session[]>([]);
   const [search, setSearch] = useState('');
-  const [allSessions, setAllSessions] = useState(false);
   // 会话正文检索：标题匹配走本地过滤，正文匹配走 FTS 索引（防抖 220ms）
   const [contentHits, setContentHits] = useState<Wire[]>([]);
   const [contentMode, setContentMode] = useState('');
@@ -153,13 +154,16 @@ export default function App() {
     if (query.length < 2) {
       setContentHits([]);
       setContentMode('');
+      setContentBusy(false);
       return;
     }
+    let cancelled = false;
     const timer = setTimeout(() => {
       setContentBusy(true);
       void window.pi
         .sessionSearch({ query, limit: 8, sinceDays: hitSince, workspace: hitScoped ? cwd : '' })
         .then(value => {
+          if (cancelled) return;
           setContentHits(value.items || []);
           setContentMode(value.mode || '');
           // 首次检索会顺带建索引，把结果说清楚，避免"搜不到但其实没建索引"
@@ -169,12 +173,13 @@ export default function App() {
             : '');
         })
         .catch(error => {
+          if (cancelled) return;
           setContentHits([]);
           setContentNote(`检索失败：${errorText(error)}`);
         })
-        .finally(() => setContentBusy(false));
+        .finally(() => { if (!cancelled) setContentBusy(false); });
     }, 220);
-    return () => clearTimeout(timer);
+    return () => { cancelled = true; clearTimeout(timer); };
   }, [search, hitSince, hitScoped, cwd]);
   const [draft, setDraft] = useState('');
   const [attachments, setAttachments] = useState<Attachment[]>([]);
@@ -455,8 +460,12 @@ export default function App() {
       if (action === 'settings') { e.preventDefault(); setSettings(true); return; }
       if (action === 'stopTask' && running) { e.preventDefault(); void stop(); return; }
       if (action === 'searchSessions') {
-        const box = document.querySelector<HTMLInputElement>('.search-box input');
-        if (box) { e.preventDefault(); box.focus(); box.select(); }
+        e.preventDefault();
+        setLeftPanel(true);
+        requestAnimationFrame(() => {
+          const box = document.querySelector<HTMLInputElement>('.search-box input');
+          box?.focus(); box?.select();
+        });
         return;
       }
       if (action === 'toggleSidebar') { e.preventDefault(); setLeftPanel(value => !value); return; }
@@ -504,6 +513,8 @@ export default function App() {
   const submitMessageEdit = async (text:string, images:Wire[]) => {
     if (!messageEdit || !ready || locked) throw new Error('请等待当前任务结束后重试');
     if (images.length && !state.model?.input?.includes('image')) throw new Error('当前模型不支持图片，请移除图片或切换模型');
+    const message = text.trim() ? text : images.length ? '请查看附件。' : '';
+    if (!message || new TextEncoder().encode(message).length > 2 * 1024 * 1024) throw new Error('消息为空或过长。');
     setActionPending(true); setNotice(null);
     try {
       let sessionId = messageEdit.preparedSessionId;
@@ -518,7 +529,7 @@ export default function App() {
         sessionId = next.state.sessionId;
         void refreshSessions(next.cwd);
       }
-      await window.pi.command('prompt',{message:text,...(images.length?{images}:{}),expectedSessionId:sessionId});
+      await window.pi.command('prompt',{message,...(images.length?{images}:{}),expectedSessionId:sessionId});
       setMessageEdit(null);setFollowing(true);void refreshSessions(cwd);
       return true;
     } finally {setActionPending(false);}
@@ -548,7 +559,6 @@ export default function App() {
       void window.pi.attachments(event.paths).then(addAttachments).catch(showError);
     }
   }), []);
-  const visibleSessions = sessions.filter(session => (allSessions || samePath(session.cwd, cwd)) && `${session.name} ${session.cwd}`.toLowerCase().includes(search.toLowerCase()));
   const visibleMessages = transcript.messages.filter((m: Wire) => m.role !== 'system' && m.role !== 'toolResult' && m.display !== false);
   const displayedMessages = showAllMessages ? visibleMessages : visibleMessages.slice(-100);
   const pendingCount = queue.steering.length + queue.followUp.length;
@@ -556,15 +566,15 @@ export default function App() {
   const inspectorOpen = acpActive ? acpRightPanel : rightPanel;
   return <div className={`app-shell ${leftPanel ? '' : 'no-sidebar'} ${inspectorOpen ? '' : 'no-inspector'}`}>
     <div className="titlebar" data-tauri-drag-region><div className="app-brand"><PiMark small /><span>Pi Desktop</span><span className="preview-label">LOCAL</span></div><div className="titlebar-center">你的想法，本地的工作空间</div><div className="window-controls"><button aria-label="最小化" onClick={() => void window.pi.window('minimize')}><Minus size={16} /></button><button aria-label="最大化" onClick={() => void window.pi.window('maximize')}><Maximize2 size={13} /></button><button aria-label="关闭窗口" className="close-window" onClick={() => void window.pi.window('close')}><X size={17} /></button></div></div>
-    {leftPanel && <aside className="sidebar"><div className="sidebar-top"><button className="new-chat" onClick={() => void connect({ cwd })} disabled={locked}><Plus size={18} /><span>{acpActive ? '新建 Pi 会话' : '新会话'}</span>{!acpActive && <kbd>Ctrl N</kbd>}</button><div className="search-box"><Search size={15} /><input aria-label="搜索会话" placeholder="搜索会话" value={search} onChange={e => setSearch(e.target.value)} /><kbd>⌕</kbd></div></div>
-      <div className="workspace-label"><span>{acpActive ? 'Pi 工作区' : '工作区'}</span><IconButton label="添加工作区" disabled={locked} onClick={() => void chooseWorkspace()}><Plus size={15} /></IconButton></div>
-      <button className="workspace-current" onClick={() => void chooseWorkspace()} disabled={locked} title={cwd}><span className="workspace-icon"><FolderOpen size={18} /></span><span><strong>{basename(cwd)}</strong><small>{cwd || '选择一个文件夹'}</small></span><ChevronDown size={14} /></button>
-      {(preferences.recentWorkspaces || []).filter(item => !samePath(item, cwd)).slice(0, 3).map(item => <button className="recent-workspace" key={item} onClick={() => void connect({ cwd: item })} disabled={locked} title={item}><Folder size={15} />{basename(item)}</button>)}
-      <div className="session-label"><span>{acpActive ? 'Pi 会话' : allSessions ? '全部会话' : '当前工作区会话'}</span><button onClick={() => setAllSessions(!allSessions)}>{allSessions ? '当前' : '全部'}</button></div>
-      <nav className="session-list" aria-label="历史会话">{visibleSessions.length ? visibleSessions.map(session => <button key={session.path} className={`session-item ${!acpActive && session.id === state.sessionId ? 'active' : ''}`} disabled={locked} onClick={() => void connect({ sessionPath: session.path })} title={`${session.name}\n${session.cwd}`}><MessageSquare size={14} /><span><strong>{session.name}</strong>{allSessions && <small>{basename(session.cwd)}</small>}</span><small className="session-date">{new Date(session.updatedAt).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })}</small></button>) : <div className="session-empty"><MessageSquare size={22} /><p>{search ? '没有找到匹配的会话' : '从一个新想法开始'}</p><span>{search ? '试试其他关键词' : '对话会自动保存在本机'}</span></div>}</nav>
+    <Sidebar hidden={!leftPanel} onError={showError} cwd={cwd} recentWorkspaces={preferences.recentWorkspaces || []} sessions={sessions} activeId={acpActive ? undefined : state.sessionId} locked={locked} search={search} onSearch={setSearch} onConnect={options => void connect(options)} onChooseWorkspace={() => void chooseWorkspace()}
+      home={<button aria-label="Pi 会话" title="Pi 会话" aria-pressed={!acpActive} onClick={() => setAcpActive(false)}><MessageSquare size={19}/></button>}
+      newChat={<button className="new-chat" onClick={() => void connect({ cwd })} disabled={locked}><Plus size={17}/><span>{acpActive ? '新建 Pi 会话' : '新会话'}</span>{!acpActive && <kbd>Ctrl N</kbd>}</button>}
+      navigation={<div className="workspace-tools">{typeof window.pi.antigravity === 'function' && <button aria-label="Antigravity 会话" title="Antigravity 会话" aria-pressed={acpActive} onClick={() => {setAcpOpened(true);setAcpActive(value => !value);}}><Zap size={19}/>{(acpStatus.busy || acpStatus.permissions > 0) && <span className="acp-nav-status">{acpStatus.permissions > 0 ? '待确认' : '运行中'}</span>}</button>}<button aria-label={acpActive ? 'Antigravity 上下文信息' : '上下文管理'} title="上下文" disabled={!acpActive && !ready} onClick={() => {if(acpActive)setAcpContextSignal(value => value + 1);else setWorkspacePanel('context');}}><Brain size={19}/></button><button aria-label="工作区命令" title="工作区命令" disabled={!ready} onClick={() => {setAcpActive(false);setWorkspacePanel('terminal');}}><Terminal size={19}/></button><button aria-label="子代理工作台" title="子代理工作台" onClick={() => {setAcpActive(false);setWorkspacePanel('agents');}}><Layers size={19}/></button></div>}
+      footer={<div className="sidebar-footer"><div className={`connection-pill ${connection}`} role="status" aria-label={connection === 'ready' ? 'Pi 已连接' : connection === 'connecting' ? '正在连接 Pi…' : 'Pi 未连接'} title={connection === 'ready' ? 'Pi 已连接' : connection === 'connecting' ? '正在连接 Pi…' : 'Pi 未连接'}><span className="status-dot"/></div><button aria-label="MCP 连接" title="MCP 连接" onClick={() => setMcpOpen(true)} disabled={!ready || locked}><Plug size={19}/></button><button aria-label="设置与连接" title="设置与连接 · Ctrl ," onClick={() => setSettings(true)}><Settings2 size={19}/></button></div>}
+    >
       {search.trim().length >= 2 && (
         <div className="content-hits">
-          <div className="session-label"><span>内容匹配{contentBusy ? '…' : ''}{contentIndexedAt > 0 && <span className="content-age">索引 {describeAge(contentIndexedAt)}</span>}</span><button onClick={() => {
+          <div className="session-label"><span>全文检索（含归档）{contentBusy ? '…' : ''}{contentIndexedAt > 0 && <span className="content-age">索引 {describeAge(contentIndexedAt)}</span>}</span><button onClick={() => {
             setContentBusy(true);
             setContentNote('');
             void window.pi.sessionIndexSync()
@@ -585,7 +595,7 @@ export default function App() {
           </div>
           {contentHits.length
             ? contentHits.map(hit => (
-                <button key={hit.path} className="content-hit" onClick={() => openHit(hit)} title={hit.path}>
+                <button key={hit.path} className="content-hit" disabled={locked} onClick={() => openHit(hit)} title={hit.path}>
                   <MessageSquare size={13} />
                   <span>
                     <strong>{hit.title || '未命名会话'}</strong>
@@ -598,9 +608,7 @@ export default function App() {
           {contentMode === 'like' && contentHits.length > 0 && <p className="content-empty">关键词少于 3 个字符，已按包含匹配（更长关键词会带相关性排序）</p>}
         </div>
       )}
-      <div className="workspace-tools">{typeof window.pi.antigravity === 'function' && <button aria-label="Antigravity 会话" aria-pressed={acpActive} onClick={() => {setAcpOpened(true);setAcpActive(value => !value);}}><Zap size={15}/>Antigravity{(acpStatus.busy || acpStatus.permissions > 0) && <span className="acp-nav-status">{acpStatus.permissions > 0 ? '待确认' : '运行中'}</span>}</button>}<button aria-label={acpActive?"Antigravity 上下文信息":"上下文管理"} disabled={!acpActive&&!ready} onClick={()=>{if(acpActive)setAcpContextSignal(value=>value+1);else setWorkspacePanel('context');}}><Brain size={15}/>上下文</button><button aria-label="工作区命令" disabled={!ready} onClick={()=>{setAcpActive(false);setWorkspacePanel('terminal');}}><Terminal size={15}/>命令</button><button aria-label="子代理工作台" onClick={()=>{setAcpActive(false);setWorkspacePanel('agents');}}><Layers size={15}/>子代理</button></div>
-      <div className="sidebar-footer"><div className={`connection-pill ${connection}`}><span className="status-dot" />{connection === 'ready' ? 'Pi 已连接' : connection === 'connecting' ? '正在连接 Pi…' : 'Pi 未连接'}</div><button className="settings-button" onClick={()=>setMcpOpen(true)} disabled={!ready||locked}><Plug size={17}/><span>MCP 连接</span></button><button className="settings-button" aria-label="设置与连接" onClick={() => setSettings(true)}><Settings2 size={17} /><span>设置与连接</span><kbd>Ctrl ,</kbd></button></div>
-    </aside>}
+    </Sidebar>
     <main className={`main-area ${acpActive ? 'backend-hidden' : ''} ${connection === 'ready' && visibleMessages.length === 0 ? 'empty-conversation' : ''}`}><header className="conversation-header"><IconButton label={leftPanel ? '收起侧栏' : '展开侧栏'} onClick={() => setLeftPanel(!leftPanel)}><PanelLeftClose size={18} /></IconButton><div className="breadcrumb"><span>{basename(cwd)}</span><ChevronRight size={13} /><strong title={title}>{title}</strong></div><div className="header-actions">{changes.available && <span className="branch-badge"><GitBranch size={13} />{changes.branch}</span>}<button className="text-button open-folder" onClick={() => void window.pi.revealWorkspace().catch(showError)}><FolderOpen size={15} />打开文件夹<ArrowUpRight size={13} /></button><IconButton label="文件与改动" onClick={() => setRightPanel(!rightPanel)} className={rightPanel ? 'selected' : ''}><PanelRight size={18} /></IconButton><div className="menu-anchor"><IconButton label="会话操作" onClick={() => setMore(!more)}><MoreHorizontal size={19} /></IconButton>{more && <div className="dropdown-menu"><button disabled={locked || !ready} onClick={() => { setMore(false); setRenameValue(title); }}><MessageSquare size={15} />重命名会话</button><button disabled={locked || !ready} onClick={() => { setMore(false); void window.pi.exportSession().then(result => { if (result) setNotice({ text: `会话已导出：${result}` }); }).catch(showError); }}><Download size={15} />导出 HTML</button><button disabled={locked || !ready} onClick={() => { setMore(false); void change('compact'); }}><Layers size={15} />压缩上下文</button></div>}</div></div></header>
       <div className="conversation-scroll" ref={scroll} onScroll={() => { const el = scroll.current; if (el) setFollowing(el.scrollHeight - el.scrollTop - el.clientHeight < 100); }}>
         {connection === 'connecting' && !snapshot ? <div className="panel-empty"><LoaderCircle size={20} className="spin" /></div> : visibleMessages.length === 0 ? <div className="welcome"><h1>今天，一起做点什么？</h1><div className="suggestions">{[

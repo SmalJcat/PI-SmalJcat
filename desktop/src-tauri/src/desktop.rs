@@ -375,7 +375,16 @@ async fn dispatch(
             .await
         }
         "reveal-workspace" => {
-            let mut cwd = core.cwd().await;
+            let mut cwd = match payload["cwd"].as_str() {
+                Some(path) => {
+                    let directory = PathBuf::from(path);
+                    if !directory.is_absolute() || !directory.is_dir() {
+                        bail!("项目文件夹不存在或不是绝对路径。");
+                    }
+                    directory
+                }
+                None => core.cwd().await,
+            };
             if cwd.as_os_str().is_empty() {
                 cwd = PathBuf::from(core.preferences().await.last_workspace);
             }

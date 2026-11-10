@@ -27,6 +27,7 @@
     "legacy:test:ui": "node tests/electron-smoke.mjs",
     "legacy:package": "npm run build && electron-builder --win dir",
     "test:agents:browser": "node tests/agents-browser.mjs",
+    "test:sidebar": "node tests/sidebar-ui.mjs",
     "release:keygen": "node scripts/release.mjs keygen",
     "release:sign": "node scripts/release.mjs sign",
     "release:verify": "node scripts/release.mjs verify",

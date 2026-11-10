@@ -53,7 +53,7 @@ export async function initializeBridge() {
       });
       return () => { disposed = true; void registration.then(unlisten => unlisten()); };
     },
-    revealWorkspace: () => call('reveal-workspace'),
+    revealWorkspace: cwd => call('reveal-workspace', { cwd }),
     revealConfig: () => call('reveal-config'),
     openLink: url => call('open-link', { url }),
     exportSession: () => call('export'),

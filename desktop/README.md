@@ -8,7 +8,7 @@
 
 悬停用户消息可复制或编辑，键盘聚焦也会显示操作。助手回复保留复制入口。编辑时可保留或移除原消息图片，普通输入框的草稿、附件和文件引用独立保留。
 
-Pi 保存编辑后从原消息之前创建新分支并重新发送，原会话保留。Antigravity 使用“编辑为新消息”，在当前会话追加修改后的内容。
+Pi 保存编辑后在当前会话内回到原消息之前并重新发送，会话 ID 和文件保持不变，左侧不新增会话；原消息及后续回复保留在同一会话的历史分支中。清空文字、仅保留图片时沿用普通发送的默认文字。Antigravity 使用“编辑为新消息”，在当前会话追加修改后的内容。
 
 ## 0.7.0 权限与上下文
 
@@ -39,16 +39,16 @@ CLI 默认位置为 `%LOCALAPPDATA%\agy\bin\agy.exe`，其它位置可在“连�
 双击桌面上的 **Pi Desktop** 或 `D:\PI\Pi Desktop.lnk`。也可以直接打开：
 
 ```text
-D:\PI\desktop\release\tauri\Pi Desktop.exe
+C:\Users\1\AppData\Local\Programs\Pi Desktop\fdea6c4\Pi Desktop.exe
 ```
 
 运行要求：Windows x64、Microsoft Edge WebView2 Runtime、本机 Pi 安装。客户端会从程序位置、当前目录的上级目录和 PATH 中查找 `pi.exe`；找不到时，在左下角「设置与连接」选择它，再重新连接。
 
 本机已经具备 WebView2。当前发布程序内嵌界面资源，不需要 Node.js；它不包含 Pi 本体、用户凭据或 WebView2 安装包。
 
-源码仓库构建的程序位于 `<repository>\desktop\release\tauri\Pi Desktop.exe`。上面的 `D:\PI` 是原开发机器的安装示例。`npm run package` 会同步程序到发布目录，校验复制后的 SHA-256，并生成 `release/tauri/release.json`，记录版本、程序大小、哈希和同步时间。桌面快捷方式始终指向此目录。
+源码仓库位于 `D:\PI-SmalJcat`，构建暂存程序位于 `<repository>\desktop\release\tauri\Pi Desktop.exe`。正式安装入口统一为 `%LOCALAPPDATA%\Programs\Pi Desktop\fdea6c4\Pi Desktop.exe`；`fdea6c4` 是兼容现有快捷方式的目录名，不代表构建提交。桌面和 `D:\PI` 的快捷方式都指向该安装入口。`npm run package` 生成暂存程序及来源清单，再通过 `npm run deploy -- --to <安装目录>` 更新安装。
 
-旧版完整程序仍位于 `release/win-unpacked/Pi Desktop.exe`，可通过 **Pi Desktop (Electron)** 快捷方式回退。旧说明与验证记录保存在 `docs/ELECTRON-0.1*.md`。
+侧栏按项目组织对话，支持折叠、跨项目搜索、会话置顶、归档及恢复；项目菜单还支持显示名、项目置顶、分区管理、打开目录及移除/恢复项目，详见 [项目侧栏](docs/PROJECT-SIDEBAR.md)。旧安装副本和 Electron 回退快捷方式按用户要求清理，源码与历史说明仍保留。
 
 ## 0.4.1 输入框候选菜单
 

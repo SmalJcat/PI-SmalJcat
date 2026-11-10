@@ -19,10 +19,30 @@ export default function desktopContext(pi) {
   pi.registerCommand('desktop-context', {
     description: '读取桌面上下文配置或重新加载已保存的设置',
     handler: async (args, ctx) => {
-      const [operation, nonce] = args.trim().split(/\s+/);
-      if (!['get', 'reload'].includes(operation) || !/^[a-f0-9-]{36}$/.test(nonce || '')) return;
+      const [operation, nonce, ...payload] = args.trim().split(/\s+/);
+      if (!['get', 'reload', 'edit'].includes(operation) || !/^[a-f0-9-]{36}$/.test(nonce || '')) return;
       const prefix = `PI_DESKTOP_CONTEXT:${nonce}:`;
       try {
+        if (operation === 'edit') {
+          const { sessionId, entryId } = JSON.parse(payload.join(' '));
+          if (ctx.sessionManager.getSessionId() !== sessionId) throw new Error('会话已切换，请重新选择要编辑的消息');
+          if (!ctx.isIdle() || ctx.hasPendingMessages()) throw new Error('请先停止当前任务再编辑消息');
+          // Pi may append model/thinking metadata while restoring this branch.
+          const branch = ctx.sessionManager.getBranch();
+          const leaf = [...branch].reverse().find(entry => !['model_change', 'thinking_level_change', 'session_info'].includes(entry.type));
+          if (leaf?.type === 'custom' && leaf.customType === 'desktop-message-edit' && leaf.data?.entryId === entryId) {
+            ctx.ui.notify(prefix + JSON.stringify({ ok: true, cancelled: false }), 'info');
+            return;
+          }
+          const target = branch.find(entry => entry.id === entryId);
+          if (target?.type !== 'message' || target.message.role !== 'user') throw new Error('该消息已不在当前会话分支中，请刷新后重新选择');
+          // Selecting a user entry navigates to its parent, excluding the old prompt.
+          const result = await ctx.navigateTree(entryId, { summarize: false });
+          // Persist the selected leaf even if resending fails or the editor is closed.
+          if (!result.cancelled) pi.appendEntry('desktop-message-edit', { entryId });
+          ctx.ui.notify(prefix + JSON.stringify({ ok: true, cancelled: !!result.cancelled }), 'info');
+          return;
+        }
         const projectTrusted = ctx.isProjectTrusted();
         // Reload invalidates this command context; the desktop reads the result
         // through a second command bound to the replacement extension runner.

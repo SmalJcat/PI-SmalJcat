@@ -148,8 +148,23 @@ const handle = command => {
         return respond(command, { disposition: 'handled' });
       }
       if (command.message.startsWith('/desktop-context ')) {
-        const [, operation, nonce] = command.message.split(' ');
-        emit({ type: 'extension_ui_request', method: 'notify', id: randomUUID(), notifyType: 'info', message: `PI_DESKTOP_CONTEXT:${nonce}:${JSON.stringify(settings())}` });
+        const [, operation, nonce, ...payload] = command.message.split(' ');
+        let result = settings();
+        if (operation === 'edit') {
+          const { sessionId: expected, entryId } = JSON.parse(payload.join(' '));
+          const target = activeEntries().find(entry => entry.id === entryId && entry.type === 'message' && entry.message.role === 'user');
+          const leaf = activeEntries().reverse().find(entry => !['model_change', 'thinking_level_change', 'session_info'].includes(entry.type));
+          const prepared = leaf?.type === 'custom' && leaf.customType === 'desktop-message-edit' && leaf.data?.entryId === entryId;
+          if (expected !== sessionId || (!target && !prepared) || active || compacting) result = { ok: false, error: 'Invalid edit target or busy session' };
+          else if (prepared) result = { ok: true, cancelled: false };
+          else if (JSON.stringify(target.message.content).includes('[edit-cancel]')) result = { ok: true, cancelled: true };
+          else {
+            leafId = target.parentId;
+            append({ type: 'custom', customType: 'desktop-message-edit', data: { entryId } });
+            result = { ok: true, cancelled: false };
+          }
+        }
+        emit({ type: 'extension_ui_request', method: 'notify', id: randomUUID(), notifyType: 'info', message: `PI_DESKTOP_CONTEXT:${nonce}:${JSON.stringify(result)}` });
         return respond(command, { disposition: 'handled', operation });
       }
       if (['/desktop-scout-test', '/desktop-scout-slow-test'].includes(command.message)) {
