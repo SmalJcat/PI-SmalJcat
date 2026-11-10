@@ -1,6 +1,6 @@
 //! 开机自启（Windows）：通过当前用户的 Run 注册表项登记本程序。
 //!
-//! 不引入额外插件：只用 reg.exe 读写一个键值，行为透明且可测。
+//! 查询与写入使用 reg.exe；删除使用 Windows 状态码，避免依赖本地化错误文本。
 //! 关键设计：注册表路径作为参数传入，测试使用独立的测试键，绝不触碰用户真实的开机启动项。
 
 use anyhow::{bail, Context, Result};
@@ -50,16 +50,36 @@ pub fn set_enabled(key: &str, command: &str) -> Result<()> {
 }
 
 /// 取消登记（键值不存在也算成功）。
+#[cfg(windows)]
 pub fn remove(key: &str) -> Result<()> {
-    let output = run(&["delete", key, "/v", VALUE_NAME, "/f"])?;
-    if output.status.success() {
-        return Ok(());
+    use windows_sys::Win32::Foundation::{
+        ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND, ERROR_SUCCESS,
+    };
+    use windows_sys::Win32::System::Registry::{RegDeleteKeyValueW, HKEY_CURRENT_USER};
+
+    let subkey = key
+        .strip_prefix("HKCU\\")
+        .context("启动项必须位于 HKCU 下")?;
+    if subkey.is_empty() || subkey.contains('\0') {
+        bail!("启动项注册表路径无效");
     }
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    if stderr.contains("无法找到") || stderr.to_lowercase().contains("unable to find") {
-        return Ok(());
+    let subkey: Vec<u16> = subkey.encode_utf16().chain(Some(0)).collect();
+    let name: Vec<u16> = VALUE_NAME.encode_utf16().chain(Some(0)).collect();
+    // SAFETY: both UTF-16 buffers are NUL-terminated and live for this call;
+    // HKEY_CURRENT_USER is a predefined handle, not an owned open registry key.
+    let status = unsafe { RegDeleteKeyValueW(HKEY_CURRENT_USER, subkey.as_ptr(), name.as_ptr()) };
+    match status {
+        ERROR_SUCCESS | ERROR_FILE_NOT_FOUND | ERROR_PATH_NOT_FOUND => Ok(()),
+        _ => bail!(
+            "删除开机启动项失败：{}",
+            std::io::Error::from_raw_os_error(status as i32)
+        ),
     }
-    bail!("删除开机启动项失败：{}", stderr.trim());
+}
+
+#[cfg(not(windows))]
+pub fn remove(_key: &str) -> Result<()> {
+    bail!("开机启动项仅支持 Windows");
 }
 
 /// 读取已登记的命令（不存在时为 None）。
@@ -95,6 +115,16 @@ mod tests {
     #[test]
     fn empty_command_is_rejected() {
         assert!(set_enabled(TEST_KEY, "   ").is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn remove_missing_key_and_reject_invalid_paths() {
+        let missing_key = format!(r"{}\{}", TEST_KEY, uuid::Uuid::new_v4());
+        remove(&missing_key).unwrap();
+        assert!(remove("HKCU\\").is_err());
+        assert!(remove("HKCU\\Software\0ignored").is_err());
+        assert!(remove(r"HKLM\Software\PiDesktop").is_err());
     }
 
     #[cfg(windows)]
