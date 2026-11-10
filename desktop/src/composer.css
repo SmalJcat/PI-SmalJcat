@@ -1,4 +1,10 @@
 /* Two-layer composer with model controls anchored to a body portal. */
+:root .composer-area .composer-footer { flex-wrap:wrap; row-gap:5px; }
+:root .composer-area .composer-footer-status { flex-wrap:wrap; row-gap:4px; }
+:root .composer-metrics { display:inline-flex; align-items:center; gap:6px; white-space:nowrap; font-variant-numeric:tabular-nums; }
+:root .composer-metrics::before { content:'·'; }
+:root .composer-footer-hints { margin-left:auto; white-space:nowrap; }
+@media (max-width:1100px) { :root .composer-area .composer-footer-hints { display:none; } }
 :root { --composer-blue: #2563eb; --composer-access: #e98249; }
 :root[data-ui="chatgpt"], :root[data-ui="cyberpunk"] { --composer-blue: #6ea8fe; }
 :root .composer-area .composer-context {

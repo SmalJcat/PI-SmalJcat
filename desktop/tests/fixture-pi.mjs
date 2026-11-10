@@ -132,6 +132,14 @@ const handle = command => {
       return respond(command, { cost: usages.reduce((sum, usage) => sum + (usage.cost?.total || 0), 0), tokens: { input: total('input'), output: total('output'), cacheRead: total('cacheRead'), cacheWrite: total('cacheWrite'), total: total('totalTokens') }, contextUsage: { tokens: contextTokens, contextWindow: model.contextWindow, percent: contextTokens / model.contextWindow * 100 } });
     }
     case 'prompt': {
+      if(command.message==='/metrics-test') {
+        active=true;emit({type:'agent_start'});completeMessage(message('user','模型统计测试'));respond(command,{disposition:'started'});
+        const reply=message('assistant',[],{model:model.id,provider:model.provider,stopReason:'pending'});
+        emit({type:'message_start',message:reply});
+        later(()=>emit({type:'message_update',assistantMessageEvent:{type:'text_delta',contentIndex:0,delta:'模型统计已更新。'}}),80);
+        later(()=>{reply.content=[{type:'text',text:'模型统计已更新。'}];reply.stopReason='stop';reply.usage={input:100,output:40,cost:{total:.0123}};emit({type:'message_end',message:reply});append({type:'message',message:reply});active=false;emit({type:'agent_end',willRetry:false});emit({type:'agent_settled',aborted:false});},400);
+        return;
+      }
       if(command.message.includes('[edit-send-fail]'))return emit({type:'response',command:command.type,id:command.id,success:false,error:'EDIT_SEND_REJECTED'});
 
       if(command.message==='/context-priority-test'){emit({type:'extension_ui_request',method:'notify',id:randomUUID(),notifyType:'info',message:'PI_DESKTOP_USAGE:'+JSON.stringify({usage:{tokens:10,contextWindow:model.contextWindow},modelKey:`${model.provider}/${model.id}`,estimated:true})});return respond(command,{disposition:'handled'});}

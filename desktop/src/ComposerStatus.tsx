@@ -82,29 +82,29 @@ export function PermissionControl({scope,mode,rules,configFile,configError,locke
   </>;
 }
 
-export function ContextControl({scope,usage,windowSize,estimated=false,stale=false,compacting=false,busy=false,autoCompact,reserveTokens,cost,onSettings,connected=true,openSignal=0}: {
-  scope:string;usage?:Wire|null;windowSize?:number;estimated?:boolean;stale?:boolean;compacting?:boolean;busy?:boolean;autoCompact?:boolean;reserveTokens?:number|null;cost?:Wire;onSettings?:()=>void;connected?:boolean;openSignal?:number;
+export function ContextControl({scope,usage,windowSize,estimated=false,stale=false,compacting=false,busy=false,autoCompact,onSettings,connected=true,openSignal=0}: {
+  scope:string;usage?:Wire|null;windowSize?:number;estimated?:boolean;stale?:boolean;compacting?:boolean;busy?:boolean;autoCompact?:boolean;onSettings?:()=>void;connected?:boolean;openSignal?:number;
 }) {
   const [open,setOpen]=useState(false),[pinned,setPinned]=useState(false),timer=useRef<ReturnType<typeof setTimeout>|null>(null),enterTimer=useRef<ReturnType<typeof setTimeout>|null>(null), id=useId();
   const close=(focus=false)=>{if(enterTimer.current)clearTimeout(enterTimer.current);setOpen(false);setPinned(false);if(focus)popover.trigger.current?.focus();};
-  const popover=usePopover(open,close,280,pinned), data=contextMeasurement(usage,windowSize);
+  const popover=usePopover(open,close,260,pinned), data=contextMeasurement(usage,windowSize);
   useEffect(()=>{if(openSignal){setPinned(true);setOpen(true);}},[openSignal]);
   const percent=data.known?Math.round(Math.min(100,data.percent||0)):null;
   const cancelClose=()=>{if(timer.current)clearTimeout(timer.current);if(enterTimer.current)clearTimeout(enterTimer.current);};
   const enter=()=>{if(open)cancelClose();else{cancelClose();enterTimer.current=setTimeout(()=>setOpen(true),220);}};
   const leave=()=>{if(enterTimer.current)clearTimeout(enterTimer.current);if(!pinned){if(timer.current)clearTimeout(timer.current);timer.current=setTimeout(()=>setOpen(false),160);}};
   useEffect(()=>()=>cancelClose(),[]);
-  const description=!connected?data.known?'未连接 · 上次统计':'未连接':compacting?'正在压缩':stale?'上次统计':busy?estimated?'运行中 · 估算':'运行中':estimated?'Pi 统计 · 含估算':usage?.source==='transcript'?'CLI 会话统计':'CLI 上报';
+  const description=!connected?'未连接':compacting?'压缩中':stale?'上次统计':estimated?'估算':busy?'运行中':'';
   return <>
     <button ref={popover.trigger} type="button" className={`context-trigger ${percent!==null&&percent>=90?'near-limit':''}`} aria-label={`${scope} 上下文用量`} aria-haspopup="dialog" aria-expanded={open} aria-controls={open?id:undefined} aria-describedby={open&&!pinned?id:undefined} title={open?undefined:data.known?`${compactTokens(data.used)} / ${compactTokens(data.size)} tokens`:data.size?`容量 ${compactTokens(data.size)} tokens`:'等待上下文统计'} onMouseEnter={enter} onMouseLeave={leave} onClick={()=>{cancelClose();if(pinned)close();else{setPinned(true);setOpen(true);}}}>
       <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><circle className="context-ring-track" cx="12" cy="12" r="8"/><circle className={`context-ring-value ${compacting?'spin':''}`} cx="12" cy="12" r="8" pathLength="100" strokeDasharray={`${percent??0} 100`}/>{!data.known&&<circle cx="12" cy="12" r="1" fill="currentColor"/>}</svg>
     </button>
-    {open&&createPortal(<div ref={popover.panel} id={id} tabIndex={-1} className={`composer-status-popover context-card ${data.known?'':'compact'}`} role={pinned?'dialog':'tooltip'} aria-label={`${scope} 上下文信息`} aria-modal={pinned?'false':undefined} style={popover.position} onMouseEnter={()=>{if(pinned)cancelClose();}} onMouseLeave={leave}>
-      <div className="status-popover-heading">上下文窗口<span>{description}</span></div>
-      {data.known?<><strong className="context-card-percent">{percent}% 已用 <span>（剩余 {Math.max(0,100-(percent||0))}%）</span></strong><p>已用 <b>{compactTokens(data.used)}</b> 标记，共 <b>{compactTokens(data.size)}</b></p><progress aria-label={`${scope} 上下文占用`} value={Math.min(data.used,data.size)} max={data.size}/><div className="context-card-details"><span>剩余 {compactTokens(data.remaining)} 标记</span>{(data.percent||0)>100&&<span>已超出窗口容量</span>}</div></>:<><strong className="context-card-percent">{connected?'用量待统计':'未连接'}</strong><p>{data.size?`当前已用 0 · 总容量 ${compactTokens(data.size)} 标记`:scope==='Antigravity'?'等待 CLI 上报用量与容量':'等待 Pi 返回上下文统计'}</p></>}
-      {autoCompact!==undefined&&<div className="context-card-details"><span>自动压缩{autoCompact?'已开启':'已关闭'}</span>{typeof reserveTokens==='number'&&data.size&&<span>触发 {compactTokens(Math.max(0,data.size-reserveTokens))}</span>}</div>}
-      {cost&&Number.isFinite(cost.amount)&&cost.amount>=0&&<details className="context-card-more"><summary>会话费用</summary><div className="context-card-details">{cost.currency} {cost.amount.toFixed(4)}</div></details>}
-      {onSettings&&pinned&&<button className="context-settings" type="button" onClick={()=>{close();onSettings();}}><Settings2 size={14}/>压缩设置与历史</button>}
+    {open&&createPortal(<div ref={popover.panel} id={id} tabIndex={-1} className={`composer-status-popover context-card ${data.known?'':'compact'}`} role={pinned?'dialog':'tooltip'} aria-label={`${scope} 上下文信息`} aria-modal={pinned?'false':undefined} style={popover.position} onMouseEnter={cancelClose} onMouseLeave={leave}>
+      <div className="status-popover-heading">上下文<span>{description}</span></div>
+      <div className="context-card-summary"><strong>{data.known?`${percent}% 已用`:connected?'用量待统计':'未连接'}</strong><span>{data.known?`${compactTokens(data.used)} / ${compactTokens(data.size)}`:data.size?`容量 ${compactTokens(data.size)}`:'等待统计'}</span></div>
+      {data.known&&<progress aria-label={`${scope} 上下文占用`} value={Math.min(data.used,data.size)} max={data.size}/>}
+      {(data.percent||0)>100&&<div className="context-card-details">已超出窗口容量</div>}
+      {(autoCompact!==undefined||(onSettings&&pinned))&&<div className="context-card-footer">{autoCompact!==undefined&&<span>自动压缩{autoCompact?'开启':'关闭'}</span>}{onSettings&&pinned&&<button className="context-settings" type="button" aria-label="压缩设置与历史" onClick={()=>{close();onSettings();}}><Settings2 size={13}/>设置</button>}</div>}
     </div>,document.body)}
   </>;
 }

@@ -78,7 +78,12 @@ export async function antigravityChecks(page, artifacts, checks, waitForValue, w
   await panel.locator('.markdown').filter({ hasText: 'ACP_PERMISSION_ALLOWED' }).first().waitFor();
   await panel.getByRole('button',{name:'Antigravity 上下文用量',exact:true}).click();
   context=page.getByRole('dialog',{name:'Antigravity 上下文信息',exact:true});await context.waitFor();
-  assert.match(await context.innerText(),/44% 已用/);assert.match(await context.innerText(),/剩余 56%/);assert.match(await context.innerText(),/364k/);assert.match(await context.innerText(),/828k/);
+  assert.match(await context.innerText(),/44% 已用/);assert.doesNotMatch(await context.innerText(),/剩余|会话费用|当前已用 0/);assert.match(await context.innerText(),/364k/);assert.match(await context.innerText(),/828k/);
+  const metrics=panel.getByLabel('Antigravity 模型统计',{exact:true});
+  assert.equal(await metrics.getByTestId('model-speed').innerText(),'—');
+  const reportedCost=(await status()).contextUsage.cost;
+  assert.equal(await metrics.getByTestId('model-cost').innerText(),`$${reportedCost.amount.toFixed(4)}`);
+  assert.ok((await context.boundingBox()).height<180);
   await page.screenshot({path:path.join(artifacts,'v070-acp-context.png')});await page.keyboard.press('Escape');
   const policyPid=(await status()).pid;
   await choosePermission(page,panel,'Antigravity','smart');await waitForValue(status,state=>state.permissionMode==='smart');
