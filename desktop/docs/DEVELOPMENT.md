@@ -146,7 +146,9 @@
 ## 2026-11-11：正式包独立验收与集成检查
 
 - 正常关闭已安装的桌面后，在独立 PowerShell 7 中完成 `npm run test:release`，并补跑官方 Antigravity CLI 检查。正式包 6 项检查通过，渲染错误 0、模型请求 0；实际程序哈希、安装副本、清单及源码指纹一致。
-- 重新安装锁定依赖并运行生产构建、JavaScript 116 项、常规 Rust 163 项、test-fixture Rust 165 项、格式和严格 Clippy，以及 WebView2 fixture 64 项，均通过。Rust 本机回环测试设置本轮进程的 `NO_PROXY` 后通过，首次代理返回 502 的日志保留。
+- Windows CI 暴露受保护配置目录的路径别名漏判。本机在 8.3 短路径环境复现后修复，按实际目标进行权限边界比较，新增 junction 别名下现存/新建文件写入与编辑的回归。
+- 最终 JavaScript 116 项、常规 Rust 164 项、test-fixture Rust 166 项、格式和严格 Clippy，以及 WebView2 fixture 64 项均通过。Rust 本机回环测试设置本轮进程的 `NO_PROXY` 后通过，首次代理返回 502 的日志保留。
+- 从干净提交 `fe50b32` 重新打包并通过正式包与官方 ACP 验收，11:40 HKT 部署至原安装入口并重新打开。最终程序 SHA-256 为 `3c12f5a142667bb6ba4244746cbfe3c7492528ceb6c75a9e11549ef6ce8ab0a3`。[PR #2](https://github.com/SmalJcat/PI-SmalJcat/pull/2) 汇总本次集成。
 - 程序来源与验收回执、完整日志位置见 [验收记录](../VERIFICATION.md) 的 2026-11-11 记录。
 
 ## 后续优先级

@@ -1,5 +1,15 @@
 # Pi Desktop 发布验收
 
+## 0.7.1 Windows CI 路径别名修复与正式交付（2026-11-11）
+
+- [PR #2](https://github.com/SmalJcat/PI-SmalJcat/pull/2) 的首次 Windows CI 在受保护配置写入检查中失败。使用 Windows 8.3 短路径作为本机 `TEMP` / `TMP`，复现了相同的 `Some(true)` / `None` 断言差异。
+- 提交 `fe50b327abd72e0c5ec1e389339217834fcbfc19` 将权限路径边界比较放到现存祖先 canonicalize、缺失尾段补齐和 `..` 归一化之后，按实际目标识别短路径与 junction。新增回归验证指向受保护目录的别名下，现存文件和新建路径的 `write` / `edit` 均需批准。旧逻辑下新增回归失败，修复后普通路径及 8.3 环境均通过。
+- 修复后 JavaScript 116 项、常规 Rust 164 项、test-fixture Rust 166 项、格式检查和全目标严格 Clippy 通过，两种 Rust 模式各有 4 项本机检查默认忽略。11:35 HKT，WebView2 + Pi/ACP fixture 64 项通过，渲染错误 0、模型请求 0。本轮 Rust 检查沿用测试进程的 loopback `NO_PROXY`。
+- 11:38 HKT 从干净提交 `fe50b327abd72e0c5ec1e389339217834fcbfc19` 重新构建正式包，17,843,712 字节，SHA-256 为 `3c12f5a142667bb6ba4244746cbfe3c7492528ceb6c75a9e11549ef6ce8ab0a3`。139 个文件的源码指纹为 `f01914d171b1f696cf5fae92422b33ece0b9bda4cfd98b5aed9b7bf36a341a22`。
+- 11:38 HKT，`npm run test:release` 5 项通过；11:39 HKT，补跑官方 Antigravity CLI 后 6 项通过。两份回执与新包哈希一致，渲染错误 0、模型请求 0，正常关闭及所属进程退出检查通过。
+- 11:40 HKT，通过既有部署工具更新 `%LOCALAPPDATA%\Programs\Pi Desktop\fdea6c4`，原安装保留为 `fdea6c4.backup-2026-11-11T03-40-45-316Z-e45642be`。暂存程序、安装副本、清单、验收回执及源码指纹已核对一致，已从原入口重新打开安装版。
+- 证据保存在 `artifacts/ci-permissions-alias-before.log`、`ci-permissions-alias-after.log`、`ci-permissions-junction-before.log`、`ci-permissions-after.log`；完整检查汇总为 `ci-closeout-20261111-checks.json`，UI 回执为 `ci-closeout-20261111-ui-result.json`，正式包回执为 `ci-closeout-20261111-release-result.json`、`ci-closeout-20261111-release-acp-result.json`。构建、验收、部署日志统一使用 `ci-closeout-20261111-*.log`，完整性回执为 `ci-closeout-20261111-integrity.json`。已查看本轮权限及官方 ACP 截图。
+
 ## 0.7.1 正式包独立验收与集成检查（2026-11-11）
 
 - 当前代理由独立 Codex 进程承载。先正常关闭已安装的 Pi Desktop，并核对其正常退出标记及进程结束，再从 PowerShell 7 执行正式包验收。
