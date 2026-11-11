@@ -79,6 +79,45 @@ fn native_policy_checks_workspace_boundaries_rules_and_protected_configuration()
 }
 
 #[test]
+fn protected_configuration_aliases_require_approval() {
+    use pi_desktop::permissions::{decide_pi, Policy};
+    let root = tempfile::tempdir().unwrap();
+    let work = root.path().join("work");
+    let profile = root.path().join("profile");
+    std::fs::create_dir(&work).unwrap();
+    std::fs::create_dir(&profile).unwrap();
+    std::fs::write(profile.join("existing.json"), "{}").unwrap();
+    let alias = work.join("configuration-alias");
+    let status = std::process::Command::new("node")
+        .args([
+            "-e",
+            "require('fs').symlinkSync(process.argv[1],process.argv[2],process.platform==='win32'?'junction':'dir')",
+        ])
+        .arg(&profile)
+        .arg(&alias)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let policy = Policy {
+        mode: Mode::Custom,
+        rules: Rules {
+            allow_tools: vec!["*".into()],
+            ..Default::default()
+        },
+        protected_paths: vec![profile],
+    };
+    for target in [alias.join("existing.json"), alias.join("nested/new.json")] {
+        for tool in ["write", "edit"] {
+            assert_eq!(
+                decide_pi(&policy, tool, &json!({"path": target}), &work),
+                None,
+                "Protected configuration aliases must require approval"
+            );
+        }
+    }
+}
+
+#[test]
 fn rules_validate_and_default_back_to_ask_without_losing_custom_rules() {
     let root = tempfile::tempdir().unwrap();
     let manager = Manager::new(root.path().into()).unwrap();

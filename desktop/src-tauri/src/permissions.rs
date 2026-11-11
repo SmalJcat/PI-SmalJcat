@@ -483,25 +483,8 @@ pub fn within(cwd: &Path, target: &str) -> bool {
     } else {
         root.join(candidate)
     };
-    let mut lexical = PathBuf::new();
-    for component in candidate.components() {
-        match component {
-            std::path::Component::ParentDir => {
-                lexical.pop();
-            }
-            std::path::Component::CurDir => {}
-            _ => lexical.push(component),
-        }
-    }
-    let in_scope = if cfg!(windows) {
-        PathBuf::from(lexical.to_string_lossy().to_lowercase())
-            .starts_with(PathBuf::from(root.to_string_lossy().to_lowercase()))
-    } else {
-        lexical.starts_with(&root)
-    };
-    if !in_scope {
-        return false;
-    }
+    // Resolve existing ancestors before comparing paths so junctions and Windows
+    // short-path aliases are checked against their actual destination.
     let mut tail = Vec::new();
     while !candidate.exists() {
         let Some(name) = candidate.file_name().map(|n| n.to_owned()) else {
