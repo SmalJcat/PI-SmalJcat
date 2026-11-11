@@ -1,7 +1,9 @@
-import { copyFile, mkdir, readFile, writeFile, rename, rm } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
 import path from 'node:path';
+import { sourceIdentity } from './source-identity.mjs';
+import { deployRelease } from './release-files.mjs';
 const root = path.resolve(import.meta.dirname, '..');
 const destination = path.join(root, 'release/tauri');
 const { version } = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
@@ -11,22 +13,24 @@ assert.equal(tauri.version, version, 'Tauri and package versions must match');
 assert.equal(/^version\s*=\s*"([^"]+)"/m.exec(cargo)?.[1], version, 'Cargo and package versions must match');
 const source = path.join(root, 'src-tauri/target/release/pi-desktop.exe');
 const executable = path.join(destination, 'Pi Desktop.exe');
-const staged = path.join(destination, `.pi-desktop-${process.pid}.tmp`);
 const manifest = path.join(destination, 'release.json');
-const stagedManifest = path.join(destination, `.release-${process.pid}.tmp`);
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 const sourceBytes = await readFile(source);
 const sha256 = digest(sourceBytes);
-await mkdir(destination, { recursive: true });
+const receipt = JSON.parse(await readFile(path.join(root, 'artifacts/package-source.json'), 'utf8'));
+const identity = receipt.source;
+assert.equal(sha256, receipt.sha256, 'Executable changed since packaging; run npm run package again');
+assert.deepEqual(await sourceIdentity(root), identity, 'Source changed since packaging; run npm run package again');
+const parent = path.dirname(destination);
+await mkdir(parent, { recursive: true });
+const staged = await mkdtemp(path.join(parent, '.package-'));
 try {
-  await copyFile(source, staged);
-  assert.equal(digest(await readFile(staged)), sha256, 'Staged executable must match the build');
-  await copyFile(path.join(root, 'src-tauri/icons/icon.ico'), path.join(destination, 'icon.ico'));
-  await writeFile(stagedManifest, JSON.stringify({ version, runtime: 'tauri', executable: 'Pi Desktop.exe', bytes: sourceBytes.length, sha256, stagedAt: new Date().toISOString() }, null, 2) + '\n');
-  await rename(staged, executable);
-  await rename(stagedManifest, manifest);
+  await copyFile(source, path.join(staged, 'Pi Desktop.exe'));
+  await copyFile(path.join(root, 'src-tauri/icons/icon.ico'), path.join(staged, 'icon.ico'));
+  await writeFile(path.join(staged, 'release.json'), JSON.stringify({ version, runtime: 'tauri', executable: 'Pi Desktop.exe', bytes: sourceBytes.length, sha256, stagedAt: new Date().toISOString(), source: identity }, null, 2) + '\n');
+  const result = await deployRelease(staged, destination);
+  if (result.backup) console.log(`Previous release: ${result.backup}`);
 } finally {
-  await rm(staged, { force: true });
-  await rm(stagedManifest, { force: true });
+  if (path.dirname(staged) === parent && path.basename(staged).startsWith('.package-')) await rm(staged, { recursive: true, force: true });
 }
 console.log(`Tauri executable: ${executable}\nVersion: ${version}\nSHA-256: ${sha256}\nManifest: ${manifest}`);

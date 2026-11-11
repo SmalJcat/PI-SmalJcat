@@ -33,3 +33,5 @@ recovery.json
 .vscode/
 .DS_Store
 Thumbs.db
+# 发布签名私钥：只保存在本地，绝不入库
+desktop/release/keys.json

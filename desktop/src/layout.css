@@ -1,0 +1,149 @@
+:root .app-shell .backend-hidden { display: none !important; }
+/* Persistent shell styles belong to the initial bundle, never a lazy panel. */
+/* Native WebView2 popups do not reliably inherit a transparent select background. */
+:root select option,
+:root select optgroup {
+  color: var(--text, #202020);
+  background-color: var(--surface, #faf9f6);
+}
+:root .composer .model-select select,
+:root .composer .thinking-select select {
+  color: var(--text, #202020);
+  background-color: var(--surface-raised, #ffffff);
+  font-size: var(--type-meta, 12px);
+}
+:root .composer .model-select select { max-width: min(280px, 32vw); }
+
+/* Keep long URLs, JSON errors and tool output inside their own containers. */
+:root .transcript .message.assistant .message-content,
+:root .transcript .markdown,
+:root .transcript .tool-card { min-width: 0; max-width: 100%; }
+:root .inline-error { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+:root .inline-error > span,
+:root .notice > div { flex: 1; min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+:root .inline-error > svg { flex-shrink: 0; }
+:root .tool-body pre { max-width: 100%; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+:root .sidebar .workspace-tools {
+  display: flex; flex-direction: column; flex-shrink: 0; gap: 2px;
+  padding: 8px 4px; border-top: 1px solid var(--border);
+}
+:root .sidebar .workspace-tools button {
+  display: flex; align-items: center; justify-content: flex-start; gap: 10px;
+  min-height: 36px; padding: 8px; border-radius: 7px;
+  font-size: var(--type-label, 13px); color: var(--text); text-align: left;
+}
+:root .sidebar .workspace-tools button:hover:not(:disabled) { background: var(--hover); }
+:root .sidebar .workspace-tools button:disabled { opacity: .45; }
+:root .sidebar .settings-button { min-height: 36px; font-size: var(--type-label, 13px); }
+:root .sidebar .sidebar-footer { flex-shrink: 0; padding-top: 8px; }
+:root .sidebar .connection-pill { font-size: var(--type-micro, 11px); }
+:root .sidebar .connection-pill .status-dot { margin: 0; border: 0; padding: 0; }
+
+/* Empty conversation keeps the welcome and composer together without moving the editor DOM. */
+:root .app-shell .main-area.empty-conversation {
+  display: grid; grid-template-rows: auto minmax(16px, 1fr) auto auto minmax(24px, 1.2fr);
+  overflow-y: auto;
+}
+:root .main-area.empty-conversation > .conversation-header { grid-row: 1; }
+:root .main-area.empty-conversation > .conversation-scroll { grid-row: 3; overflow: visible; }
+:root .main-area.empty-conversation > .composer-area { grid-row: 4; margin-top: 0; }
+:root .main-area.empty-conversation .welcome { min-height: 0; padding: 16px 24px 24px; }
+:root .main-area.empty-conversation .welcome h1 { font-size: clamp(24px, 2.4vw, 34px); margin: 0 0 24px; text-align: center; }
+:root .main-area.empty-conversation .suggestions { margin-top: 0; gap: 8px; max-width: 680px; }
+:root .main-area.empty-conversation .suggestion-card { padding: 12px; border-radius: 10px; }
+:root .main-area.empty-conversation .suggestion-card strong { justify-content: center; font-size: var(--type-meta, 12px); }
+
+/* Quiet, shared hierarchy for secondary interfaces. */
+:root .modal .workspace-panel-heading { margin-bottom: 16px; gap: 16px; }
+:root .modal .workspace-panel-heading h3 { font-size: var(--type-title, 16px); margin: 0; }
+:root .modal .workspace-panel-heading p { margin: 4px 0 0; color: var(--muted); }
+:root .modal .workspace-panel { font-size: var(--type-label, 13px); }
+:root .modal .workspace-panel textarea,
+:root .modal .workspace-panel select,
+:root .modal .workspace-panel input { font-size: var(--type-meta, 12px); }
+:root .modal .panel-disclosure > summary { cursor: pointer; color: var(--muted); padding: 10px 0; font-size: var(--type-meta, 12px); }
+:root .modal .panel-disclosure[open] > summary { color: var(--text); }
+:root .modal .panel-field,
+:root .modal .panel-checkbox { font-size: var(--type-meta, 12px); }
+
+/* Agent workspace: the list remains visible while creation is an explicit mode. */
+:root .modal .agents-panel { padding: 20px; }
+:root .modal .agents-capacity { font-size: var(--type-meta, 12px); color: var(--muted); }
+:root .modal .agents-layout { grid-template-columns: minmax(230px, 29%) minmax(0, 1fr); }
+:root .agents-panel .agent-task-sidebar { display: flex; flex-direction: column; overflow: hidden; }
+:root .agents-panel .task-list-filters { flex-shrink: 0; border-top: 0; padding: 14px; gap: 8px; }
+:root .agents-panel .task-filter-options { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+:root .agents-panel .task-filter-options label { grid-column: 1 / -1; }
+:root .agents-panel .task-list-filters > details > summary { padding: 3px 0; }
+:root .agents-panel .agent-task-list { flex: 1; min-height: 0; overflow-y: auto; }
+:root .agents-panel .agent-task-list .panel-empty-note { padding: 16px 14px; }
+:root .agents-panel .agent-task-row { padding: 13px 14px; }
+:root .agents-panel .agent-task-row strong { font-size: var(--type-label, 13px); }
+:root .agents-panel .agent-task-row small,
+:root .agents-panel .agent-task-row time { font-size: var(--type-micro, 11px); color: var(--muted); }
+:root .agents-panel .agent-task-row-meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; }
+:root .agents-panel .task-pagination { position: static; flex-shrink: 0; }
+:root .agents-panel .agent-create { padding: 0; max-width: 680px; margin: 0 auto; }
+:root .agents-panel .agent-create textarea { min-height: 140px; font-size: var(--type-label, 13px); }
+:root .agents-panel .agent-create .primary-button { width: auto; }
+:root .agents-panel .agent-create-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px; }
+:root .agents-panel .agent-create-header h4 { margin: 0; font-size: var(--type-title, 16px); }
+:root .agents-panel .agent-role-line { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; margin: 12px 0; }
+:root .agents-panel .agent-role-line label { margin: 0; flex: 1; min-width: 180px; }
+:root .agents-panel .agent-role-note { display: inline-flex; align-items: center; min-height: 35px; padding: 6px 12px; border: 1px solid var(--surface-elevated-secondary, var(--border)); border-radius: 8px; background: var(--surface); color: var(--muted); font-size: var(--type-meta, 12px); white-space: nowrap; }
+:root .agents-panel .agent-advanced-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+:root .agents-panel .task-output { max-height: none; font: var(--type-code, 13px)/1.8 var(--font-code, Consolas, monospace); }
+:root .agents-panel .task-detail-empty { min-height: 220px; height: 100%; }
+:root .agents-panel .task-output-toolbar { gap: 12px; flex-wrap: wrap; }
+:root .agents-panel .task-record-meta { font-size: var(--type-micro, 11px); }
+:root .modal .context-meter { height: 8px; }
+:root .modal .context-meter progress { height: 8px; border-radius: 99px; background: var(--surface-elevated-secondary, var(--border)); }
+:root .modal .context-meter progress::-webkit-progress-bar { background: var(--surface-elevated-secondary, var(--border)); border-radius: 99px; }
+:root .modal .context-meter progress::-webkit-progress-value { background: var(--composer-blue, var(--accent)); border-radius: 99px; }
+:root .modal .context-meter > span { top: -3px; width: 2px; height: 14px; border-radius: 1px; background: var(--composer-access, var(--text)); box-shadow: 0 0 0 1px var(--surface-raised); }
+
+:root .modal .settings-nav-group { padding: 12px 0 4px; }
+:root .modal .settings-split { display: grid; grid-template-columns: 168px minmax(0, 1fr); padding: 0; min-height: 0; height: min(680px, calc(100vh - 140px)); overflow: hidden; }
+:root .modal .settings-nav { display: flex; flex-direction: column; overflow-y: auto; padding: 16px 12px; border-right: 1px solid var(--border); background: var(--sidebar); }
+:root .modal .settings-nav-item { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 36px; padding: 8px; border-radius: 8px; text-align: left; font-size: var(--type-meta, 12px); }
+:root .modal .settings-nav-item.active { background: var(--surface-raised); }
+:root .modal .settings-content { min-width: 0; overflow-y: auto; padding: 24px; }
+:root .modal .settings-nav-group > h4 { margin: 0 10px 6px; font-size: var(--type-micro, 11px); font-weight: 400; color: var(--muted); }
+:root .modal .settings-content .settings-title { font-size: var(--type-title, 16px); }
+:root .modal .settings-content .pref-row { gap: 16px; flex-wrap: wrap; }
+:root .modal .settings-content .pref-options { flex-wrap: wrap; max-width: 100%; }
+:root .modal .settings-content .setting-path { gap: 12px; }
+:root .modal .settings-content .setting-path code { overflow-wrap: anywhere; min-width: 0; }
+:root .modal .settings-content .update-card { padding: 16px; }
+:root .modal .pref-toggle .pref-hint { max-width: 36em; }
+:root .modal .mcp-scope-tabs { display: inline-flex; gap: 4px; padding: 3px; margin-bottom: 18px; border: 1px solid var(--surface-elevated-secondary, var(--border)); border-radius: 10px; background: var(--surface); }
+:root .modal .mcp-scope-tabs button { padding: 6px 14px; border-radius: 7px; font-size: var(--type-label, 13px); color: var(--muted); }
+:root .modal .mcp-scope-tabs button[aria-selected=true] { background: var(--surface-raised); color: var(--text); font-weight: 500; }
+:root .modal .mcp-panel { min-width: 0; }
+:root .modal .preview-toolbar { flex-wrap: wrap; gap: 10px; }
+:root .modal .preview-controls { flex-wrap: wrap; }
+:root .modal .terminal-toolbar { flex-wrap: wrap; }
+:root .modal .terminal-toolbar input[aria-label="命令"] { min-width: 180px; flex: 1; }
+:root .modal .terminal-mode { font-size: var(--type-micro, 11px); color: var(--muted); padding: 6px 0 10px; }
+:root .modal .terminal-current { display: block; padding: 8px 0; font-size: var(--type-code, 12px); overflow-wrap: anywhere; }
+:root .modal .terminal-head { min-width: 0; flex-wrap: wrap; }
+:root .modal .terminal-head > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+:root .modal .terminal-subhead { display: flex; align-items: center; gap: 12px; padding: 8px 20px; border-bottom: 1px solid var(--border); }
+
+@media (max-width: 900px) {
+  :root .modal.wide { width: calc(100vw - 32px); max-width: calc(100vw - 32px); }
+  :root .modal .settings-split { grid-template-columns: 145px minmax(0, 1fr); }
+  :root .modal .settings-content { padding: 16px; }
+  :root .modal .agents-panel { padding: 12px; }
+  :root .modal .agent-task-detail { padding: 16px; }
+  :root .agents-panel .agent-advanced-grid { grid-template-columns: 1fr; }
+  :root .modal .terminal-body { grid-template-columns: 170px minmax(0, 1fr); }
+  :root .main-area.empty-conversation .suggestions { grid-template-columns: 1fr; max-width: 360px; }
+  :root .main-area.empty-conversation .welcome h1 { font-size: 24px; }
+}
+@media (max-height: 700px) {
+  :root .main-area.empty-conversation .welcome { padding: 12px 20px 16px; }
+  :root .main-area.empty-conversation .welcome h1 { margin-bottom: 16px; }
+  :root .sidebar .workspace-tools { padding-top: 4px; padding-bottom: 4px; }
+}

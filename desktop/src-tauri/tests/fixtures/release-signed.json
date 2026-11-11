@@ -1,0 +1,13 @@
+{
+  "version": "9.9.9",
+  "runtime": "tauri",
+  "executable": "Pi Desktop.exe",
+  "bytes": 4242,
+  "sha256": "c16a40a4584e5bccc84b45172fcdfa922f59ff1edebf3adba7b8266ea04eb39a",
+  "stagedAt": "2026-01-01T00:00:00.000Z",
+  "signature": {
+    "algorithm": "ed25519",
+    "keyId": "release-fixture",
+    "signature": "/ADYnT2n7bEAj0sMTH6EnbTVhnUUfPSlIHe56KeC9lzHjOwXO9QGnfkjEG67Vp/wgwZ+m5VSbRtdIqGI3BdGBw=="
+  }
+}

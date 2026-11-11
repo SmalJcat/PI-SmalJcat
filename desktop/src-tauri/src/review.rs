@@ -213,11 +213,25 @@ pub async fn file_review(cwd: &Path, relative: &str, stage: &str) -> Result<Valu
     let patch = if untracked {
         String::new()
     } else {
+        let previous = change["previous"]
+            .as_str()
+            .filter(|_| stage == "staged" && code.first() == Some(&b'R'));
         let mut args = vec!["diff", "--no-ext-diff", "--no-textconv"];
         if stage == "staged" {
             args.push("--cached");
         }
-        args.extend(["--", relative]);
+        if previous.is_some() {
+            args.push("--find-renames");
+        }
+        // Git needs both sides of a staged rename. Literal pathspecs keep
+        // spaces, brackets and other pathspec metacharacters as filename text.
+        let current_pathspec = relative.to_owned();
+        let previous_pathspec = previous.map(str::to_owned);
+        args.push("--");
+        args.push(&current_pathspec);
+        if let Some(previous_pathspec) = previous_pathspec.as_deref() {
+            args.push(previous_pathspec);
+        }
         String::from_utf8_lossy(&git_bytes(&cwd, &args).await?).into_owned()
     };
     Ok(

@@ -22,6 +22,7 @@ fn start(manager: &Arc<Manager>, cwd: &Path, task: &str) -> Result<Value> {
         NewTask {
             task: task.into(),
             cwd: cwd.to_path_buf(),
+            role: None,
             parent_session: "parent-session.jsonl".into(),
             model: "fixture/fixture-model".into(),
             thinking: "medium".into(),
@@ -192,6 +193,7 @@ async fn cancelling_a_parent_tool_does_not_cancel_manual_background_tasks() -> R
         NewTask {
             task: "等待父工具任务".into(),
             cwd: temp.path().to_path_buf(),
+            role: None,
             parent_session: "parent-session.jsonl".into(),
             model: "fixture/fixture-model".into(),
             thinking: "medium".into(),
@@ -222,4 +224,90 @@ async fn cancelling_a_parent_tool_does_not_cancel_manual_background_tasks() -> R
     .await;
     manager.shutdown().await;
     result
+}
+
+#[tokio::test]
+async fn full_result_and_archive_preserve_a_real_fixture_session() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let manager = Manager::new(temp.path().join("tasks"), temp.path().join("locks"))?;
+    let task = start(&manager, temp.path(), "[fixture-long-agent]")?;
+    let id = task["id"].as_str().unwrap();
+    assert!(manager.archive(id, true).is_err());
+    assert!(manager.output(id, 0, None).is_err());
+    let finished = wait(&manager, |v| {
+        count(v, &["completed"]) == 1 && v["active"] == 0
+    })
+    .await;
+    manager.shutdown().await;
+    finished?;
+    let detail = manager.detail(id)?;
+    assert_eq!(detail["truncated"], true);
+    let session = PathBuf::from(detail["sessionPath"].as_str().unwrap());
+    let bytes = fs::read(&session)?;
+    let mut output = String::new();
+    let mut offset = Some(0);
+    let mut version = None;
+    while let Some(next) = offset {
+        let page = manager.output(id, next, version.as_deref())?;
+        output.push_str(page["text"].as_str().unwrap());
+        offset = page["nextOffset"].as_u64().map(|n| n as usize);
+        version = page["version"].as_str().map(String::from);
+    }
+    assert!(output.ends_with("RESULT_END"));
+    assert!(output.len() > 128 * 1024);
+    manager.archive(id, true)?;
+    assert!(manager.retry(id, runner(), false).is_err());
+    manager.archive(id, false)?;
+    assert_eq!(fs::read(session)?, bytes);
+    Ok(())
+}
+
+/// 只读角色缺省时行为不变；可写角色必须用独立 worktree，且任务记录带出分支。
+#[tokio::test]
+async fn writable_roles_require_and_create_an_isolated_worktree() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let manager = Manager::new(temp.path().join("tasks"), temp.path().join("locks"))?;
+
+    // 非 git 工作区：可写角色必须被拒绝，而不是就地改文件
+    let error = manager
+        .start(
+            NewTask {
+                task: "改点东西".into(),
+                cwd: temp.path().to_path_buf(),
+                role: Some("editor".into()),
+                parent_session: String::new(),
+                model: "fixture/fixture-model".into(),
+                thinking: "medium".into(),
+                system_prompt: String::new(),
+                owner: String::new(),
+                project_trusted: false,
+            },
+            runner(),
+            None,
+        )
+        .err()
+        .context("应当拒绝在非 git 工作区里创建可写角色")?;
+    assert!(error.to_string().contains("需要 git 仓库"), "{error}");
+
+    // 未知角色直接报错，并列出可选值
+    let error = manager
+        .start(
+            NewTask {
+                task: "x".into(),
+                cwd: temp.path().to_path_buf(),
+                role: Some("admin".into()),
+                parent_session: String::new(),
+                model: "fixture/fixture-model".into(),
+                thinking: "medium".into(),
+                system_prompt: String::new(),
+                owner: String::new(),
+                project_trusted: false,
+            },
+            runner(),
+            None,
+        )
+        .err()
+        .context("应当拒绝未知角色")?;
+    assert!(error.to_string().contains("未知角色"), "{error}");
+    Ok(())
 }

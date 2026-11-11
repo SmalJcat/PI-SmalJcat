@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "review",
+  "description": "独立审阅窗口只读取变更与补丁，并把引用发回主窗口；没有会话、工具或进程能力。",
+  "windows": ["review"],
+  "permissions": ["core:event:allow-listen", "core:event:allow-unlisten"]
+}

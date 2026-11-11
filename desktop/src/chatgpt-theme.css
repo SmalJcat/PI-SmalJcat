@@ -1,0 +1,496 @@
+/* ============================================================================
+   ChatGPT 风格界面 preset —— 按实测设计令牌标定（自研实现，不含任何第三方资源）
+   ----------------------------------------------------------------------------
+   数值来源：对已安装的 ChatGPT 桌面端（OpenAI.Codex 26.1103.4239.0）打包 CSS 的
+   只读解析——它的设计系统是 Tailwind v4 + 语义令牌。下面每一项都标注了它的原始令牌，
+   便于你按需微调或核对。未复制其样式表或资源，全部是我们自己的选择器与命名。
+
+   它的关键实测值（暗色）：
+     color-surface            = gray-200 = #212121    → 对话区底色
+     color-surface-secondary  = gray-100 = #181818    → 侧栏 / 右侧面板
+     color-surface-elevated   = gray-300 = #303030    → 输入台 / 卡片 / hover
+     color-surface-elevated-secondary = gray-400 = #414141 → 二级抬升
+     text-primary             = gray-900 = #ededed
+     text-secondary           = gray-700 = #afafaf
+     border / gray-300        = #303030（毛发线 0.5px）
+     radius-xs/sm/md/lg/xl/2xl/3xl/4xl = 4/6/8/10/12/16/20/24 px
+     composer-radius          = radius-4xl = 24px
+     modal-radius             = radius-xl  = 12px；弹窗内边距 = spacing*5 = 20px
+     chat-max-width           = 800px     → 对话列宽
+     thread-gutter            = spacing*4 = 16px
+     composer-gutter          = spacing*3 = 12px
+     sidebar                  = clamp(240px, 275px, …) → 275px
+     text-base = 14px / line-height 1.5；text-sm 12px；text-xl 28px；text-2xl 36px
+     font-sans = -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif（系统字体，无需第三方字体）
+   作用域：所有规则挂在 :root[data-ui="chatgpt"] 下，preset 未启用时本文件不生效。
+   ============================================================================ */
+
+/* ---------------------------------------------------------------------------
+   1) 设计变量（改这里）
+   --------------------------------------------------------------------------- */
+:root[data-ui="chatgpt"] {
+  color-scheme: dark;
+
+  /* 表面层次：与它的 gray-100/200/300/400 对齐 */
+  --bg: #212121;
+  --sidebar: #181818;
+  --panel: #181818;
+  --surface: #212121;
+  --surface-raised: #303030;
+  --surface-elevated-secondary: #414141;
+
+  /* 文字与描边 */
+  --text: #ededed;
+  --muted: #afafaf;
+  --border: #303030;
+  --hover: #303030;
+
+  /* 主操作：深色主题下用"浅底深字" */
+  --accent: #ededed;
+  --accent-dark: #cdcdcd;
+  --green: #19c37d;
+
+  /* 尺寸：全部来自它的令牌（括号内是原始令牌名） */
+  --rail-width: 275px;          /* spacing-token-sidebar */
+  --inspector-width: 300px;
+  --titlebar-height: 44px;      /* height-titlebar = spacing * 11 */
+  --header-height: 46px;        /* height-toolbar */
+  --header-height-sm: 36px;     /* height-toolbar-sm */
+  --nav-row-height: 30px;       /* height-token-nav-row */
+  --row-height: 36px;           /* height-token-row */
+  --row-padding-y: 6px;         /* padding-row-y */
+  --row-padding-x: 8px;         /* padding-row-x = spacing * 2 */
+  --panel-padding: 10px;        /* padding-panel = padding-panel-base / 2 */
+  --toolbar-padding: 8px;       /* padding-toolbar = spacing * 2 */
+  --column-width: var(--chat-width, 768px);   /* 由对话宽度偏好下发；区间对应它的 compact 640 / 标准 768 / 展开 900 */
+  --thread-gutter: 10px;        /* thread-body-inline-padding = padding-panel */
+  --composer-gutter: 12px;      /* composer-gutter = spacing * 3 */
+  --thread-top-inset: 32px;     /* thread-content-top-inset = spacing * 8 */
+  --composer-bottom-inset: 16px;/* thread-composer-bottom-inset = spacing * 4 */
+  --button-icon-size: 32px;     /* button-icon-size */
+
+  /* 间距阶梯：来自它的 --spacing: .25rem（4px 网格）。
+     新样式一律用阶梯，不再写孤立数值，便于整体调节密度。 */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --icon-size: 16px;            /* icon-leading-size */
+
+  /* 圆角：基准值 × 用户缩放（--radius-scale） */
+  --radius-xs: calc(4px * var(--radius-scale, 1));
+  --radius-sm: calc(6px * var(--radius-scale, 1));
+  --radius-md: calc(8px * var(--radius-scale, 1));
+  --radius-lg: calc(10px * var(--radius-scale, 1));
+  --radius-xl: calc(12px * var(--radius-scale, 1));   /* modal-radius */
+  --radius-2xl: calc(16px * var(--radius-scale, 1));
+  --radius-4xl: calc(24px * var(--radius-scale, 1));  /* composer-radius */
+  --radius-pill: 9999px;
+
+  --line-height-ui: 1.5;     /* text-base 的行高 */
+  --shadow-md: 0 2px 4px -1px #00000014;
+  --shadow-card: 0 4px 16px 0 #0000000d;   /* shadow-card */
+  --shadow-pop: 0 8px 24px rgba(0, 0, 0, 0.5);
+
+  /* 字体：它对 Windows 就是用系统栈 */
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei UI', sans-serif;
+  font-size: 14px;
+  line-height: var(--line-height-ui);
+}
+
+/* ---------------------------------------------------------------------------
+   2) 布局
+   --------------------------------------------------------------------------- */
+:root[data-ui="chatgpt"] .app-shell {
+  grid-template-columns: var(--rail-width) minmax(420px, 1fr) var(--inspector-width);
+  grid-template-rows: var(--titlebar-height) minmax(0, 1fr);
+}
+:root[data-ui="chatgpt"] .app-shell.no-inspector { grid-template-columns: var(--rail-width) minmax(420px, 1fr); }
+:root[data-ui="chatgpt"] .app-shell.no-sidebar { grid-template-columns: minmax(420px, 1fr) var(--inspector-width); }
+
+:root[data-ui="chatgpt"] .titlebar { background: var(--sidebar); border-bottom: 1px solid transparent; padding-left: 14px; }
+:root[data-ui="chatgpt"] .modal-backdrop { inset: var(--titlebar-height) 0 0; background: rgba(0, 0, 0, 0.6); backdrop-filter: none; }
+:root[data-ui="chatgpt"] .conversation-header { height: var(--header-height); min-height: var(--header-height); border-bottom-color: var(--border); padding: 0 var(--toolbar-padding); }
+:root[data-ui="chatgpt"] .inspector > header { height: var(--header-height); min-height: var(--header-height); padding: 0 var(--toolbar-padding); }
+
+/* 对话列：内容 768px + 两侧 panel-padding；顶部留白 32px（thread-content-top-inset） */
+:root[data-ui="chatgpt"] .transcript {
+  max-width: calc(var(--column-width) + var(--thread-gutter) * 2);
+  padding: var(--thread-top-inset) var(--thread-gutter) var(--thread-top-inset);
+}
+:root[data-ui="chatgpt"] .composer-area {
+  max-width: calc(var(--column-width) + var(--thread-gutter) * 2);
+  padding: 0 var(--thread-gutter) var(--composer-bottom-inset);
+  background: linear-gradient(0deg, var(--bg) 78%, transparent);
+}
+
+/* ---------------------------------------------------------------------------
+   3) 侧栏与右侧面板
+   --------------------------------------------------------------------------- */
+:root[data-ui="chatgpt"] .sidebar { background: var(--sidebar); border-right: 1px solid transparent; padding: var(--panel-padding) var(--row-padding-x) 0; }
+:root[data-ui="chatgpt"] .inspector { background: var(--panel); border-left: 1px solid var(--border); }
+:root[data-ui="chatgpt"] .sidebar-footer { border-top-color: var(--border); }
+
+/* 新会话：朴素一行（不是卡片），与它的侧栏入口一致 */
+:root[data-ui="chatgpt"] .new-chat {
+  background: transparent; border: 0; box-shadow: none;
+  padding: var(--row-padding-y) var(--row-padding-x); border-radius: var(--radius-lg);
+  min-height: var(--row-height); font-weight: 400; color: var(--text);
+}
+:root[data-ui="chatgpt"] .new-chat:hover { background: var(--hover); }
+:root[data-ui="chatgpt"] .workspace-current { background: transparent; border-radius: var(--radius-lg); }
+:root[data-ui="chatgpt"] .workspace-current:hover { background: var(--hover); }
+:root[data-ui="chatgpt"] .recent-workspace { border-radius: var(--radius-lg); }
+:root[data-ui="chatgpt"] .session-item { border-radius: var(--radius-lg); padding: var(--row-padding-y) var(--row-padding-x); min-height: var(--row-height); }
+:root[data-ui="chatgpt"] .session-item:hover { background: var(--hover); }
+:root[data-ui="chatgpt"] .session-item.active { background: var(--surface-raised); }
+:root[data-ui="chatgpt"] .search-box { margin: 10px 8px 16px; }
+:root[data-ui="chatgpt"] .workspace-label, :root[data-ui="chatgpt"] .session-label { letter-spacing: 0; color: var(--muted); }
+:root[data-ui="chatgpt"] .settings-button { border-radius: var(--radius-lg); }
+
+/* ---------------------------------------------------------------------------
+   4) 输入台（composer）：24px 圆角 + elevated 表面 + 细描边
+   --------------------------------------------------------------------------- */
+:root[data-ui="chatgpt"] .composer {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-4xl);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-md);
+  padding: 6px 8px 8px;
+}
+:root[data-ui="chatgpt"] .composer:focus-within { border-color: var(--surface-elevated-secondary); }
+:root[data-ui="chatgpt"] .composer textarea { font-size: 14px; line-height: var(--line-height-ui); padding: 12px 12px 6px; }
+:root[data-ui="chatgpt"] .composer textarea::placeholder { font-size: 14px; }
+:root[data-ui="chatgpt"] .composer-toolbar { padding: 2px 6px 0; }
+:root[data-ui="chatgpt"] .send-button { background: var(--text); color: #0d0d0d; }
+:root[data-ui="chatgpt"] .send-button:hover:not(:disabled) { background: #ffffff; }
+:root[data-ui="chatgpt"] .send-button:disabled { background: var(--surface-raised); color: var(--muted); }
+:root[data-ui="chatgpt"] .stop-button { border-color: var(--border); color: var(--text); }
+:root[data-ui="chatgpt"] .composer-footer { padding: 8px 6px 0; font-size: 11px; }
+:root[data-ui="chatgpt"] .command-menu { border-radius: var(--radius-2xl); border-color: var(--border); background: var(--surface-raised); box-shadow: var(--shadow-pop); }
+:root[data-ui="chatgpt"] .command-menu button { border-radius: var(--radius-lg); }
+
+/* ---------------------------------------------------------------------------
+   5) 消息：助手纯文本 + 用户浅色气泡
+   --------------------------------------------------------------------------- */
+:root[data-ui="chatgpt"] .message { margin-bottom: 22px; }
+:root[data-ui="chatgpt"] .user .message-content {
+  background: var(--surface-raised); border-radius: var(--radius-2xl);
+  padding: 10px 16px; font-size: 14px; line-height: var(--line-height-ui);
+}
+:root[data-ui="chatgpt"] .assistant .message-content { padding-left: 0; }
+:root[data-ui="chatgpt"] .pi-mark { background: var(--accent); color: #0d0d0d; }
+:root[data-ui="chatgpt"] .message-heading { font-weight: 500; margin-bottom: 8px; font-size: 13px; }
+:root[data-ui="chatgpt"] .message-heading .pi-mark { width: 22px; height: 22px; font-size: 14px; border-radius: var(--radius-pill); box-shadow: none; }
+:root[data-ui="chatgpt"] .message-actions { padding-left: 0; }
+:root[data-ui="chatgpt"] .markdown { font-size: 14px; line-height: 1.6; }
+:root[data-ui="chatgpt"] .markdown code { background: var(--surface-raised); border-radius: var(--radius-sm); }
+:root[data-ui="chatgpt"] .code-block { border-color: var(--border); border-radius: var(--radius-xl); background: #0d0d0d; }
+:root[data-ui="chatgpt"] .tool-card { border-color: var(--border); border-radius: var(--radius-xl); background: var(--surface); }
+:root[data-ui="chatgpt"] .tool-card summary { border-radius: var(--radius-xl); }
+:root[data-ui="chatgpt"] .thinking > div { border-left-color: var(--surface-elevated-secondary); background: rgba(255, 255, 255, 0.03); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; }
+:root[data-ui="chatgpt"] .working-indicator { margin-left: 0; }
+
+/* 空态：它用大号标题 + 克制的说明，而不是落地页式的卡片墙 */
+:root[data-ui="chatgpt"] .welcome-badge { margin-bottom: 18px; }
+:root[data-ui="chatgpt"] .welcome h1 { font-size: 36px; font-weight: 400; letter-spacing: -0.02em; margin: 12px 0 10px; }
+:root[data-ui="chatgpt"] .welcome > p { font-size: 14px; line-height: var(--line-height-ui); color: var(--muted); }
+:root[data-ui="chatgpt"] .eyebrow { letter-spacing: 0.08em; color: var(--muted); }
+:root[data-ui="chatgpt"] .suggestions { margin-top: 32px; gap: 10px; }
+:root[data-ui="chatgpt"] .suggestion-card {
+  border: 1px solid var(--border); border-radius: var(--radius-2xl);
+  background: transparent; padding: 14px 16px; transition: background 0.15s, border-color 0.15s;
+}
+:root[data-ui="chatgpt"] .suggestion-card:hover { background: var(--surface-raised); border-color: var(--surface-elevated-secondary); transform: none; }
+:root[data-ui="chatgpt"] .suggestion-icon { height: 20px; margin-bottom: 12px; color: var(--muted); }
+:root[data-ui="chatgpt"] .suggestion-card strong { font-size: 13px; font-weight: 500; }
+:root[data-ui="chatgpt"] .suggestion-card small { font-size: 12px; line-height: var(--line-height-ui); color: var(--muted); }
+:root[data-ui="chatgpt"] .welcome-workspace { color: var(--muted); }
+
+/* ---------------------------------------------------------------------------
+   6) 按钮 / 表单 / 弹窗
+   --------------------------------------------------------------------------- */
+:root[data-ui="chatgpt"] .primary-button { background: var(--text); color: #0d0d0d; font-weight: 500; border-radius: var(--radius-lg); }
+:root[data-ui="chatgpt"] .primary-button:hover:not(:disabled) { background: #ffffff; }
+:root[data-ui="chatgpt"] .secondary-button { background: rgba(255, 255, 255, 0.06); border-color: var(--surface-elevated-secondary); border-radius: var(--radius-lg); }
+:root[data-ui="chatgpt"] .secondary-button:hover:not(:disabled) { background: var(--surface-elevated-secondary); border-color: #525252; }
+:root[data-ui="chatgpt"] .icon-button { width: var(--button-icon-size); height: var(--button-icon-size); border-radius: var(--radius-lg); }
+:root[data-ui="chatgpt"] .text-button { border-radius: var(--radius-lg); padding: 6px 8px; }
+:root[data-ui="chatgpt"] .icon-button:hover:not(:disabled), :root[data-ui="chatgpt"] .text-button:hover { background: var(--hover); }
+:root[data-ui="chatgpt"] input, :root[data-ui="chatgpt"] textarea, :root[data-ui="chatgpt"] select { border-radius: var(--radius-lg); }
+:root[data-ui="chatgpt"] button:focus-visible, :root[data-ui="chatgpt"] input:focus-visible,
+:root[data-ui="chatgpt"] textarea:focus-visible, :root[data-ui="chatgpt"] select:focus-visible { outline: 2px solid #7a7a7a; }
+
+:root[data-ui="chatgpt"] .modal { background: var(--surface-raised); border: 1px solid var(--surface-elevated-secondary); border-radius: var(--radius-xl); box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6); }
+:root[data-ui="chatgpt"] .modal > header { border-bottom-color: var(--surface-elevated-secondary); }
+:root[data-ui="chatgpt"] .modal select, :root[data-ui="chatgpt"] .modal input:not([type="range"]), :root[data-ui="chatgpt"] .modal textarea { border-color: var(--surface-elevated-secondary); }
+:root[data-ui="chatgpt"] .modal .setting-path code, :root[data-ui="chatgpt"] .modal .trust-option, :root[data-ui="chatgpt"] .modal .workspace-card, :root[data-ui="chatgpt"] .modal .context-metrics, :root[data-ui="chatgpt"] .modal .context-metrics > div + div, :root[data-ui="chatgpt"] .modal .agents-layout, :root[data-ui="chatgpt"] .modal .agent-task-sidebar, :root[data-ui="chatgpt"] .modal .agent-task-row, :root[data-ui="chatgpt"] .modal .task-pagination, :root[data-ui="chatgpt"] .modal .task-pagination button, :root[data-ui="chatgpt"] .modal .task-output, :root[data-ui="chatgpt"] .modal .task-output-pages button, :root[data-ui="chatgpt"] .modal .mcp-card, :root[data-ui="chatgpt"] .modal .terminal-subhead, :root[data-ui="chatgpt"] .modal .terminal-history, :root[data-ui="chatgpt"] .modal .terminal-output, :root[data-ui="chatgpt"] .modal .preview-toolbar, :root[data-ui="chatgpt"] .modal .split-review .review-code:first-child, :root[data-ui="chatgpt"] .modal .review-side-label { border-color: var(--surface-elevated-secondary); }
+:root[data-ui="chatgpt"] .modal-body { padding: 20px; }          /* modal-container-inner-padding = spacing * 5 */
+:root[data-ui="chatgpt"] .diagnostics pre { background: #1a1a1a; border-radius: var(--radius-lg); }
+:root[data-ui="chatgpt"] .dropdown-menu { border-radius: var(--radius-2xl); border-color: var(--surface-elevated-secondary); background: var(--surface-raised); box-shadow: var(--shadow-pop); }
+:root[data-ui="chatgpt"] .dropdown-menu button { border-radius: var(--radius-lg); }
+:root[data-ui="chatgpt"] .dropdown-menu button:hover:not(:disabled), :root[data-ui="chatgpt"] .command-menu button:hover:not(:disabled) { background: var(--surface-elevated-secondary); }
+:root[data-ui="chatgpt"] .jump-bottom { background: var(--surface-raised); border-color: var(--surface-elevated-secondary); box-shadow: var(--shadow-pop); padding: 6px 14px; font-size: 12px; }
+:root[data-ui="chatgpt"] .notice { background: var(--surface); border-color: var(--surface-elevated-secondary); border-radius: var(--radius-xl); }
+:root[data-ui="chatgpt"] .attachment { background: var(--surface); border-color: var(--border); border-radius: var(--radius-lg); }
+
+/* 右侧面板 */
+:root[data-ui="chatgpt"] .panel-tabs button.active:after { background: var(--text); }
+:root[data-ui="chatgpt"] .file-row { border-radius: var(--radius-md); }
+:root[data-ui="chatgpt"] .file-row:hover, :root[data-ui="chatgpt"] .changed-file:hover { background: var(--hover); }
+:root[data-ui="chatgpt"] .changed-file { border-radius: var(--radius-md); }
+:root[data-ui="chatgpt"] .inspector-footer { background: var(--sidebar); }
+:root[data-ui="chatgpt"] .local-icon { background: var(--surface-raised); border-radius: var(--radius-lg); }
+
+/* ---------------------------------------------------------------------------
+   7) 功能卡片（上下文 / 子代理 / 终端 / 索引 / MCP / 扩展 / 更新）统一到同一套中性色
+   --------------------------------------------------------------------------- */
+:root[data-ui="chatgpt"] .update-card { border-color: var(--border); border-radius: var(--radius-xl); background: var(--surface); box-shadow: var(--shadow-card); }
+:root[data-ui="chatgpt"] .extension-row, :root[data-ui="chatgpt"] .terminal-run { border-radius: var(--radius-lg); }
+:root[data-ui="chatgpt"] .update-chip { border-radius: var(--radius-pill); font-weight: 500; }
+:root[data-ui="chatgpt"] .update-chip.ok { color: #7ee2b8; }
+:root[data-ui="chatgpt"] .update-chip.busy { color: #c9dafa; }
+:root[data-ui="chatgpt"] .update-chip.error { color: #ffb3af; }
+:root[data-ui="chatgpt"] .update-chip.idle { color: var(--muted); }
+:root[data-ui="chatgpt"] .permission-chip { border-radius: var(--radius-xs); }
+:root[data-ui="chatgpt"] .permission-chip.risk-low { color: #7ee2b8; }
+:root[data-ui="chatgpt"] .permission-chip.risk-medium { color: #f7d4a3; }
+:root[data-ui="chatgpt"] .permission-chip.risk-high { color: #ffb3af; }
+:root[data-ui="chatgpt"] .terminal-output { background: #0d0d0d; border-color: var(--border); border-radius: var(--radius-lg); }
+:root[data-ui="chatgpt"] .mcp-result { border-radius: var(--radius-lg); }
+:root[data-ui="chatgpt"] .audit-row { border-left-width: 2px; }
+
+/* ---------------------------------------------------------------------------
+   8) 滚动条与可访问性
+   --------------------------------------------------------------------------- */
+:root[data-ui="chatgpt"] ::-webkit-scrollbar { width: 8px; height: 8px; }
+:root[data-ui="chatgpt"] ::-webkit-scrollbar-thumb { background: #3a3a3a; border-radius: var(--radius-pill); }
+:root[data-ui="chatgpt"] ::-webkit-scrollbar-thumb:hover { background: var(--surface-elevated-secondary); }
+:root[data-ui="chatgpt"] ::selection { background: #4a4a4a; color: #fff; }
+
+@media (prefers-reduced-motion: reduce) {
+  :root[data-ui="chatgpt"] * { transition: none !important; }
+}
+@media (forced-colors: active) {
+  :root[data-ui="chatgpt"] .app-shell { forced-color-adjust: auto; }
+}
+
+/* ---------------------------------------------------------------------------
+   9) 动效：克制、可关（prefers-reduced-motion 时全部关闭）
+   --------------------------------------------------------------------------- */
+@keyframes pi-rise { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: none; } }
+@keyframes pi-rise-sm { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+@keyframes pi-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes pi-pop { from { opacity: 0; transform: translateY(6px) scale(.99); } to { opacity: 1; transform: none; } }
+@keyframes pi-pulse { 0%, 100% { opacity: .28; } 50% { opacity: 1; } }
+@keyframes pi-caret { 0%, 45% { opacity: 1; } 55%, 100% { opacity: 0; } }
+
+/* 消息入场：新消息轻微上浮淡入 */
+:root[data-ui="chatgpt"] .message { animation: pi-rise 0.18s ease-out both; }
+:root[data-ui="chatgpt"] .tool-card { animation: pi-rise-sm 0.14s ease-out both; }
+
+/* 流式进行中：呼吸点 + 光标闪烁 */
+:root[data-ui="chatgpt"] .working-dots i { animation: pi-pulse 1.1s ease-in-out infinite; }
+:root[data-ui="chatgpt"] .working-dots i:nth-child(2) { animation-delay: 0.14s; }
+:root[data-ui="chatgpt"] .working-dots i:nth-child(3) { animation-delay: 0.28s; }
+:root[data-ui="chatgpt"] .working-indicator::after {
+  content: '';
+  display: inline-block;
+  width: 7px;
+  height: 14px;
+  margin-left: 4px;
+  vertical-align: -2px;
+  background: var(--text);
+  animation: pi-caret 1s step-end infinite;
+}
+
+/* 交互过渡：只动颜色与阴影，不做位移，避免列表抖动 */
+:root[data-ui="chatgpt"] .session-item,
+:root[data-ui="chatgpt"] .new-chat,
+:root[data-ui="chatgpt"] .workspace-current,
+:root[data-ui="chatgpt"] .recent-workspace,
+:root[data-ui="chatgpt"] .icon-button,
+:root[data-ui="chatgpt"] .text-button,
+:root[data-ui="chatgpt"] .secondary-button,
+:root[data-ui="chatgpt"] .primary-button,
+:root[data-ui="chatgpt"] .file-row,
+:root[data-ui="chatgpt"] .changed-file,
+:root[data-ui="chatgpt"] .suggestion-card,
+:root[data-ui="chatgpt"] .update-card,
+:root[data-ui="chatgpt"] .extension-row,
+:root[data-ui="chatgpt"] .terminal-run {
+  transition: background-color 0.14s ease, border-color 0.14s ease, color 0.14s ease;
+}
+:root[data-ui="chatgpt"] .composer { transition: border-color 0.16s ease, box-shadow 0.18s ease; }
+:root[data-ui="chatgpt"] .send-button { transition: background-color 0.14s ease, transform 0.12s ease; }
+:root[data-ui="chatgpt"] .send-button:active:not(:disabled) { transform: scale(0.94); }
+
+/* 弹窗与菜单入场 */
+:root[data-ui="chatgpt"] .modal-backdrop { animation: pi-fade 0.14s ease-out both; }
+:root[data-ui="chatgpt"] .modal { animation: pi-pop 0.16s ease-out both; }
+:root[data-ui="chatgpt"] .command-menu,
+:root[data-ui="chatgpt"] .dropdown-menu { animation: pi-rise-sm 0.12s ease-out both; }
+:root[data-ui="chatgpt"] .notice { animation: pi-rise-sm 0.14s ease-out both; }
+
+/* ---------------------------------------------------------------------------
+   10) 收掉装饰性模块（ChatGPT 的界面里没有这些"落地页"元素）
+   --------------------------------------------------------------------------- */
+:root[data-ui="chatgpt"] .titlebar-center,
+:root[data-ui="chatgpt"] .preview-label,
+:root[data-ui="chatgpt"] .welcome-badge,
+:root[data-ui="chatgpt"] .inspector-footer { display: none; }
+
+/* 建议卡片：保留入口功能，改成一行紧凑快捷方式（去掉装饰图标与说明行） */
+:root[data-ui="chatgpt"] .suggestions { margin-top: 28px; gap: 8px; }
+:root[data-ui="chatgpt"] .suggestion-card { padding: 10px 12px; border-radius: var(--radius-xl); }
+:root[data-ui="chatgpt"] .suggestion-icon,
+:root[data-ui="chatgpt"] .suggestion-card small,
+:root[data-ui="chatgpt"] .suggestion-card strong svg { display: none; }
+:root[data-ui="chatgpt"] .suggestion-card strong { justify-content: center; font-size: 13px; font-weight: 400; }
+:root[data-ui="chatgpt"] .welcome h1 { margin: 0 0 12px; }
+:root[data-ui="chatgpt"] .welcome-workspace { margin-top: 18px; opacity: 0.8; }
+
+/* ---------------------------------------------------------------------------
+   11) 设置对话框：左栏分区 + 右栏内容（替代原先一列滚动的卡片墙）
+   --------------------------------------------------------------------------- */
+:root[data-ui="chatgpt"] .settings-split {
+  display: grid; grid-template-columns: 168px 1fr; gap: 0; padding: 0;
+  min-height: 420px; max-height: min(680px, calc(100vh - 140px));
+}
+:root[data-ui="chatgpt"] .settings-nav {
+  display: flex; flex-direction: column; gap: 2px; padding: var(--space-4) var(--space-3);
+  border-right: 1px solid var(--border); background: var(--sidebar); overflow: auto;
+}
+:root[data-ui="chatgpt"] .settings-nav-head { display: flex; align-items: center; gap: 8px; padding: 0 6px 12px; }
+:root[data-ui="chatgpt"] .settings-nav-head strong { display: block; font-size: 12px; font-weight: 500; }
+:root[data-ui="chatgpt"] .settings-nav-head > div > span { font-size: 10px; color: var(--muted); }
+:root[data-ui="chatgpt"] .settings-nav-item {
+  display: flex; align-items: center; gap: 8px; padding: var(--row-padding-y) var(--row-padding-x);
+  border-radius: var(--radius-lg); font-size: 12px; color: var(--muted); text-align: left;
+  transition: background-color 0.14s ease, color 0.14s ease;
+}
+:root[data-ui="chatgpt"] .settings-nav-item:hover { background: var(--hover); color: var(--text); }
+:root[data-ui="chatgpt"] .settings-nav-item.active { background: var(--surface-raised); color: var(--text); }
+:root[data-ui="chatgpt"] .settings-content { padding: var(--space-5); overflow: auto; min-width: 0; }
+:root[data-ui="chatgpt"] .settings-title { margin: 0 0 16px; font-size: 15px; font-weight: 500; }
+:root[data-ui="chatgpt"] .settings-diagnostics {
+  max-height: 380px; overflow: auto; font-size: 10px; line-height: 1.55; padding: 10px;
+  border-radius: var(--radius-lg); background: #1a1a1a; border: 1px solid var(--border);
+}
+:root[data-ui="chatgpt"] .settings-shortcuts { margin-top: 20px; padding-top: 14px; border-top: 1px solid var(--border); }
+
+/* ---------------------------------------------------------------------------
+   12) 动效偏好：精简 = 去位移只留淡入；关闭 = 全部停用
+   --------------------------------------------------------------------------- */
+:root[data-ui="chatgpt"][data-motion="reduced"] .message,
+:root[data-ui="chatgpt"][data-motion="reduced"] .tool-card,
+:root[data-ui="chatgpt"][data-motion="reduced"] .modal,
+:root[data-ui="chatgpt"][data-motion="reduced"] .command-menu,
+:root[data-ui="chatgpt"][data-motion="reduced"] .dropdown-menu { animation: pi-fade 0.14s ease-out both; }
+:root[data-ui="chatgpt"][data-motion="reduced"] .send-button:active:not(:disabled) { transform: none; }
+:root[data-ui="chatgpt"][data-motion="off"] *,
+:root[data-ui="chatgpt"][data-motion="off"] *::before,
+:root[data-ui="chatgpt"][data-motion="off"] *::after { animation: none !important; transition: none !important; }
+:root[data-ui="chatgpt"][data-motion="off"] .working-indicator::after { animation: none; opacity: 1; }
+
+/* ---------------------------------------------------------------------------
+   13) 偏好控件（分段控件与开关）
+   --------------------------------------------------------------------------- */
+:root[data-ui="chatgpt"] .pref-row {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--space-4);
+  padding: var(--space-3) 0; border-bottom: 1px solid var(--border);
+}
+:root[data-ui="chatgpt"] .pref-row:last-of-type { border-bottom: 0; }
+:root[data-ui="chatgpt"] .pref-meta { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+:root[data-ui="chatgpt"] .pref-label { font-size: var(--type-label); color: var(--text); }
+:root[data-ui="chatgpt"] .pref-hint { font-size: var(--type-micro, 11px); color: var(--muted); }
+:root[data-ui="chatgpt"] .pref-options {
+  display: inline-flex; gap: 2px; padding: 2px; flex-shrink: 0;
+  background: var(--sidebar); border: 1px solid var(--border); border-radius: var(--radius-lg);
+}
+:root[data-ui="chatgpt"] .pref-option {
+  padding: 5px 10px; border-radius: calc(var(--radius-lg) - 2px);
+  font-size: var(--type-meta); color: var(--muted);
+  transition: background-color 0.14s ease, color 0.14s ease;
+}
+:root[data-ui="chatgpt"] .pref-option:hover { color: var(--text); background: var(--hover); }
+:root[data-ui="chatgpt"] .pref-option.active { background: var(--surface-raised); color: var(--text); }
+:root[data-ui="chatgpt"] .pref-toggle { cursor: pointer; }
+:root[data-ui="chatgpt"] .pref-toggle input { width: 16px; height: 16px; accent-color: var(--text); flex-shrink: 0; }
+/* ---------------------------------------------------------------------------
+   14) 快捷键录制
+   --------------------------------------------------------------------------- */
+:root[data-ui="chatgpt"] .shortcut-control { display: inline-flex; align-items: center; gap: var(--space-2); flex-shrink: 0; }
+:root[data-ui="chatgpt"] .shortcut-control kbd {
+  min-width: 64px; text-align: center; padding: 3px 8px;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--sidebar); color: var(--text); font-size: var(--type-micro);
+}
+:root[data-ui="chatgpt"] .secondary-button.recording { border-color: var(--text); color: var(--text); }
+:root[data-ui="chatgpt"] .shortcut-warning { color: #f7d4a3; }
+/* ---------------------------------------------------------------------------
+   15) 存储用量
+   --------------------------------------------------------------------------- */
+:root[data-ui="chatgpt"] .storage-size { display: inline-flex; flex-direction: column; align-items: flex-end; gap: 1px; font-variant-numeric: tabular-nums; font-size: var(--type-meta); }
+:root[data-ui="chatgpt"] .storage-size small { color: var(--muted); font-size: var(--type-micro); }
+/* ---------------------------------------------------------------------------
+   16) 会话正文检索结果
+   --------------------------------------------------------------------------- */
+:root[data-ui="chatgpt"] .content-hits { margin: 4px 0 8px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+:root[data-ui="chatgpt"] .content-hit {
+  display: flex; gap: 8px; width: 100%; text-align: left; align-items: flex-start;
+  padding: var(--row-padding-y) var(--row-padding-x); border-radius: var(--radius-lg);
+  color: var(--text); transition: background-color 0.14s ease;
+}
+:root[data-ui="chatgpt"] .content-hit:hover { background: var(--hover); }
+:root[data-ui="chatgpt"] .content-hit span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+:root[data-ui="chatgpt"] .content-hit strong { font-size: var(--type-meta); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+:root[data-ui="chatgpt"] .content-hit small { font-size: var(--type-micro); line-height: 1.5; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+:root[data-ui="chatgpt"] .content-empty { margin: 4px var(--row-padding-x) 8px; font-size: var(--type-micro); color: var(--muted); }
+/* ---------------------------------------------------------------------------
+   17) 会话检索过滤
+   --------------------------------------------------------------------------- */
+:root[data-ui="chatgpt"] .hit-filters { display: flex; flex-wrap: wrap; gap: 2px; padding: 2px var(--row-padding-x) 6px; }
+:root[data-ui="chatgpt"] .hit-filter {
+  padding: 3px 8px; border-radius: var(--radius-sm);
+  font-size: var(--type-micro); color: var(--muted);
+  transition: background-color 0.14s ease, color 0.14s ease;
+}
+:root[data-ui="chatgpt"] .hit-filter:hover { background: var(--hover); color: var(--text); }
+:root[data-ui="chatgpt"] .hit-filter.active { background: var(--surface-raised); color: var(--text); }
+/* ---------------------------------------------------------------------------
+   18) 命中定位：滚动到那句话并短暂高亮
+   --------------------------------------------------------------------------- */
+@keyframes pi-hit-pulse {
+  0% { background-color: #3d3d1f; outline-color: #b8b06a; }
+  100% { background-color: transparent; outline-color: transparent; }
+}
+:root[data-ui="chatgpt"] .message.hit-flash {
+  outline: 1px solid transparent; outline-offset: 6px; border-radius: var(--radius-xl);
+  animation: pi-hit-pulse 2.4s ease-out 1;
+}
+:root[data-ui="chatgpt"] .locate-note {
+  margin: 0 0 8px; padding: 8px 12px; border-radius: var(--radius-lg);
+  background: var(--surface-raised); border: 1px solid var(--border);
+  font-size: var(--type-meta); color: var(--muted);
+}
+/* ---------------------------------------------------------------------------
+   19) 命中导航条
+   --------------------------------------------------------------------------- */
+:root[data-ui="chatgpt"] .locate-bar {
+  position: sticky; top: 8px; z-index: 6; float: right; margin: 8px 12px 0 0;
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 4px 6px; border-radius: var(--radius-lg);
+  background: var(--surface-raised); border: 1px solid var(--border);
+  box-shadow: var(--shadow-card); font-size: var(--type-micro); color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+:root[data-ui="chatgpt"] .locate-bar button {
+  min-width: 22px; height: 22px; border-radius: var(--radius-sm); color: var(--text);
+}
+:root[data-ui="chatgpt"] .locate-bar button:hover:not(:disabled) { background: var(--hover); }
+:root[data-ui="chatgpt"] .locate-bar button:disabled { color: var(--muted); }

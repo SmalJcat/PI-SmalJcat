@@ -32,6 +32,8 @@ pub struct Runner {
 pub struct NewTask {
     pub task: String,
     pub cwd: PathBuf,
+    /// 子代理角色 id；缺省为只读探子，保持既有行为。
+    pub role: Option<String>,
     pub parent_session: String,
     pub model: String,
     pub thinking: String,
@@ -58,6 +60,7 @@ pub struct Task {
     pub session_path: Option<PathBuf>,
     pub retry_of: Option<String>,
     pub attempts: u64,
+    pub archived_at: Option<u64>,
     pub output: String,
     pub partial: String,
     pub truncated: bool,
@@ -67,11 +70,17 @@ pub struct Task {
     pub system_prompt: String,
     pub owner: String,
     pub project_trusted: bool,
+    /// 角色 id（scout / verifier / editor / runner）。
+    pub role: String,
+    /// 可写角色的工作树路径；只读角色为空。
+    pub worktree: Option<String>,
+    /// 可写角色产出的分支。
+    pub branch: Option<String>,
     #[serde(skip)]
     last_saved: u64,
 }
 impl Task {
-    fn active(&self) -> bool {
+    pub(crate) fn active(&self) -> bool {
         matches!(
             self.status.as_str(),
             "queued" | "starting" | "running" | "cancelling"
@@ -90,6 +99,7 @@ impl Task {
                 "canResume".into(),
                 json!(
                     !self.active()
+                        && self.archived_at.is_none()
                         && self.status != "completed"
                         && self.session_path.as_ref().is_some_and(|p| p.is_file())
                 ),
@@ -116,6 +126,7 @@ enum Completion {
 }
 
 pub struct Manager {
+    pub permissions: Arc<crate::permissions::Manager>,
     root: PathBuf,
     lease_root: PathBuf,
     admin: Mutex<()>,
@@ -126,6 +137,10 @@ pub struct Manager {
     pub launch_lock: AsyncMutex<()>,
     pids: Mutex<HashSet<u32>>,
     warnings: Mutex<Vec<String>>,
+    /// 本地索引：记录写入后同步，避免"要手点重建才有新数据"。
+    index: Mutex<Option<Arc<crate::index_store::IndexStore>>>,
+    /// 自上次同步以来变动过的任务 id。
+    dirty: Mutex<HashSet<String>>,
 }
 impl Manager {
     pub fn new(root: PathBuf, lease_root: PathBuf) -> Result<Arc<Self>> {
@@ -142,7 +157,7 @@ impl Manager {
         files.sort_by_key(|entry| {
             std::cmp::Reverse(entry.metadata().ok().and_then(|m| m.modified().ok()))
         });
-        for entry in files.into_iter().take(300) {
+        for entry in files {
             let file = entry.path();
             let read = (|| -> Result<Task> {
                 if fs::metadata(&file)?.len() > 1024 * 1024 {
@@ -160,6 +175,7 @@ impl Manager {
                 Ok(mut task) => {
                     if task.active() {
                         task.status = "interrupted".into();
+                        task.archived_at = None;
                         task.finished_at = Some(now());
                         task.updated_at = now();
                         task.error =
@@ -175,6 +191,7 @@ impl Manager {
             }
         }
         Ok(Arc::new(Self {
+            permissions: crate::permissions::Manager::new(root.join("permissions"))?,
             root,
             lease_root,
             admin: Mutex::new(()),
@@ -185,7 +202,90 @@ impl Manager {
             launch_lock: AsyncMutex::new(()),
             pids: Mutex::new(HashSet::new()),
             warnings: Mutex::new(warnings),
+            index: Mutex::new(None),
+            dirty: Mutex::new(HashSet::new()),
         }))
+    }
+
+    /// 挂上索引并在启动时全量对齐一次：这样每次启动都能自愈历史漂移。
+    pub fn attach_index(&self, index: Arc<crate::index_store::IndexStore>) {
+        *self.index.lock().unwrap() = Some(index);
+        self.sync_index_all();
+    }
+
+    /// 把全部记录写进索引（启动对齐 / 手工修复）。
+    pub fn sync_index_all(&self) {
+        let index = self.index.lock().unwrap().clone();
+        let Some(index) = index else {
+            return;
+        };
+        let records = self.records.lock().unwrap();
+        let mut synced = 0_u64;
+        for task in records.values() {
+            let value = serde_json::to_value(task).unwrap_or(Value::Null);
+            if index.upsert(&value).unwrap_or(false) {
+                synced += 1;
+            }
+        }
+        let total = records.len() as u64;
+        drop(records);
+        self.dirty.lock().unwrap().clear();
+        // 记录被删过时索引里会留下孤儿：按 id 集合清理一遍
+        if synced < total {
+            let ids = index.ids().unwrap_or_default();
+            for id in ids {
+                if !self.records.lock().unwrap().contains_key(&id) {
+                    let _ = index.remove(&id);
+                }
+            }
+        }
+    }
+
+    /// 同步自上次以来变动过的记录。列表查询前调用，保证界面看到的与索引一致。
+    pub fn flush_index(&self) {
+        let index = self.index.lock().unwrap().clone();
+        let Some(index) = index else {
+            return;
+        };
+        let pending: Vec<String> = {
+            let mut dirty = self.dirty.lock().unwrap();
+            if dirty.is_empty() {
+                return;
+            }
+            dirty.drain().collect()
+        };
+        for id in pending {
+            let record = self.records.lock().unwrap().get(&id).cloned();
+            match record {
+                Some(task) => {
+                    let value = serde_json::to_value(&task).unwrap_or(Value::Null);
+                    let _ = index.upsert(&value);
+                }
+                None => {
+                    let _ = index.remove(&id);
+                }
+            }
+        }
+    }
+
+    /// 标记某个任务需要同步。
+    fn mark_dirty(&self, id: &str) {
+        if self.index.lock().unwrap().is_some() {
+            self.dirty.lock().unwrap().insert(id.to_owned());
+        }
+    }
+    /// 忘记一条任务：从内存与索引里移除。调用方负责先删掉记录文件（保留策略走这条路）。
+    pub fn forget(&self, id: &str) {
+        self.records.lock().unwrap().remove(id);
+        self.dirty.lock().unwrap().remove(id);
+        if let Some(index) = self.index.lock().unwrap().clone() {
+            let _ = index.remove(id);
+        }
+    }
+
+    /// 任务记录根目录（存储用量面板要用）。
+    pub fn root(&self) -> &Path {
+        &self.root
     }
     pub fn pids(&self) -> HashSet<u32> {
         self.pids.lock().unwrap().clone()
@@ -200,6 +300,7 @@ impl Manager {
             task.updated_at = now();
             if force || now().saturating_sub(task.last_saved) > 500 {
                 task.last_saved = now();
+                self.mark_dirty(id);
                 if let Err(error) = atomic_json(
                     &self.root.join(format!("{id}.json")),
                     &serde_json::to_value(&*task).unwrap_or(Value::Null),
@@ -223,10 +324,91 @@ impl Manager {
             .context("找不到该任务")
     }
     pub fn list(&self) -> Value {
+        self.query(&json!({}))
+            .expect("default history query is valid")
+    }
+    pub fn query(&self, data: &Value) -> Result<Value> {
+        // 列表查询前把变动同步进索引：界面看到的检索结果与记录保持一致
+        self.flush_index();
+        let query: crate::agent_history::Query = serde_json::from_value(data.clone())?;
+        let page_size = query.page_size()?;
         let records = self.records.lock().unwrap();
-        let mut rows = records.values().collect::<Vec<_>>();
-        rows.sort_by_key(|task| std::cmp::Reverse(task.created_at));
-        json!({"tasks":rows.into_iter().take(300).map(|t|t.public(false)).collect::<Vec<_>>(),"concurrency":CONCURRENCY,"active":self.jobs.lock().unwrap().len(),"warnings":*self.warnings.lock().unwrap()})
+        let mut rows = records
+            .values()
+            .filter(|task| query.matches(task))
+            .collect::<Vec<_>>();
+        rows.sort_by(|a, b| {
+            b.created_at
+                .cmp(&a.created_at)
+                .then_with(|| a.id.cmp(&b.id))
+        });
+        let total = rows.len();
+        let total_pages = total.div_ceil(page_size).max(1);
+        let page = query.page.unwrap_or(1).min(total_pages);
+        Ok(
+            json!({"tasks":rows.into_iter().skip((page-1)*page_size).take(page_size).map(|t|t.public(false)).collect::<Vec<_>>(),
+            "total":total,"page":page,"pageSize":page_size,"totalPages":total_pages,
+            "concurrency":CONCURRENCY,"active":self.jobs.lock().unwrap().len(),"warnings":*self.warnings.lock().unwrap()}),
+        )
+    }
+    pub fn archive(&self, id: &str, archived: bool) -> Result<Value> {
+        let _admin = self.admin.lock().unwrap();
+        let mut records = self.records.lock().unwrap();
+        let old = records.get(id).context("找不到该任务")?;
+        if old.active() || self.jobs.lock().unwrap().contains_key(id) {
+            bail!("任务仍在运行或收尾，不能归档或恢复归档");
+        }
+        if archived && old.status != "completed" {
+            bail!("只能归档已完成任务；失败、取消和中断任务需保留以便恢复");
+        }
+        let mut task = old.clone();
+        task.archived_at = if archived { Some(now()) } else { None };
+        task.updated_at = now();
+        atomic_json(
+            &self.root.join(format!("{id}.json")),
+            &serde_json::to_value(&task)?,
+        )?;
+        let result = task.public(true);
+        records.insert(id.to_owned(), task);
+        drop(records);
+        // 归档会改 archived_at，索引里的归档筛选必须跟着变
+        if let Some(current) = self.records.lock().unwrap().get(id).cloned() {
+            let value = serde_json::to_value(&current).unwrap_or(Value::Null);
+            if let Some(index) = self.index.lock().unwrap().clone() {
+                let _ = index.upsert(&value);
+            }
+        }
+        Ok(result)
+    }
+    fn session_path(&self, task: &Task) -> Result<PathBuf> {
+        let root = workspace::canonical(&self.root)?;
+        let directory = workspace::canonical(&self.root.join(&task.id))?;
+        if directory != root.join(&task.id) {
+            bail!("任务目录不能指向其他位置");
+        }
+        let path = task.session_path.as_ref().context("没有保存的子会话")?;
+        let path = workspace::within_workspace(&directory, &path.to_string_lossy())?;
+        if !path.is_file() {
+            bail!("子会话不是文件");
+        }
+        Ok(path)
+    }
+    pub fn output(&self, id: &str, offset: usize, version: Option<&str>) -> Result<Value> {
+        let _admin = self.admin.lock().unwrap();
+        let task = self.task(id)?;
+        if task.active() || self.jobs.lock().unwrap().contains_key(id) {
+            bail!("任务结束后才能读取完整结果，运行中请查看实时预览");
+        }
+        let (text, actual_version, source) = if task.session_path.is_some() {
+            let path = self.session_path(&task)?;
+            let _lease = session_guard::acquire(&self.lease_root, &path)?;
+            let (text, version) = crate::agent_history::session_output(&path)?;
+            (text, version, "session")
+        } else {
+            let (text, version) = crate::agent_history::record_output(&task)?;
+            (text, version, "record")
+        };
+        crate::agent_history::output_page(&text, &actual_version, source, offset, version)
     }
     pub fn detail(&self, id: &str) -> Result<Value> {
         Ok(self.task(id)?.public(true))
@@ -238,9 +420,18 @@ impl Manager {
         retry_of: Option<String>,
     ) -> Result<Value> {
         let _admin = self.admin.lock().unwrap();
+        self.start_locked(spec, runner, retry_of)
+    }
+    fn start_locked(
+        self: &Arc<Self>,
+        spec: NewTask,
+        runner: Runner,
+        retry_of: Option<String>,
+    ) -> Result<Value> {
         let NewTask {
             task,
             cwd,
+            role,
             parent_session,
             model,
             thinking,
@@ -260,13 +451,35 @@ impl Manager {
         if !cwd.is_dir() {
             bail!("工作区不存在");
         }
+        // 角色决定工具白名单与是否需要独立工作树；可写角色必须隔离，否则拒绝。
+        let role = crate::agent_roles::resolve(
+            role.as_deref().unwrap_or(crate::agent_roles::DEFAULT_ROLE),
+        )?;
+        crate::agent_roles::ensure_supported(role, crate::worktree::is_repo(&cwd))?;
         let id = Uuid::new_v4().to_string();
+        let mut worktree_path: Option<String> = None;
+        let mut branch: Option<String> = None;
+        if crate::agent_roles::needs_worktree(role) {
+            let target = self.root.join("worktrees").join(&id);
+            let name = crate::worktree::branch_for(&id);
+            let created = crate::worktree::create(&cwd, &target, &name)?;
+            worktree_path = Some(created.path);
+            branch = Some(created.branch);
+        }
+        let run_cwd = workspace::canonical(Path::new(&crate::agent_roles::effective_cwd(
+            role,
+            &cwd.to_string_lossy(),
+            worktree_path.as_deref(),
+        )?))?;
         let time = now();
         let record = Task {
             id: id.clone(),
             agent: "default".into(),
             task,
-            cwd,
+            cwd: run_cwd,
+            role: role.id.to_owned(),
+            worktree: worktree_path,
+            branch,
             parent_session,
             model,
             thinking,
@@ -295,21 +508,16 @@ impl Manager {
         self.detail(&id)
     }
     pub fn retry(self: &Arc<Self>, id: &str, runner: Runner, resume: bool) -> Result<Value> {
+        let _admin = self.admin.lock().unwrap();
         let old = self.task(id)?;
-        if old.active() {
-            bail!("请先停止当前任务");
+        if old.archived_at.is_some() {
+            bail!("请先恢复归档任务");
+        }
+        if old.active() || self.jobs.lock().unwrap().contains_key(id) {
+            bail!("请先等待当前任务及进程收尾结束");
         }
         if resume {
-            let _admin = self.admin.lock().unwrap();
-            if self.task(id)?.active() {
-                bail!("任务已在运行");
-            }
-            let path = old
-                .session_path
-                .as_ref()
-                .filter(|p| p.is_file())
-                .context("没有可继续的已保存子会话，请重新运行")?;
-            workspace::within_workspace(&self.root, &path.to_string_lossy())?;
+            self.session_path(&old)?;
             self.update(id, true, |task| {
                 task.status = "queued".into();
                 task.error = None;
@@ -327,10 +535,11 @@ impl Manager {
             }
             self.detail(id)
         } else {
-            self.start(
+            self.start_locked(
                 NewTask {
                     task: old.task,
                     cwd: old.cwd,
+                    role: Some(old.role),
                     parent_session: old.parent_session,
                     model: old.model,
                     thinking: old.thinking,
@@ -382,6 +591,7 @@ impl Manager {
         job.cancel
             .store(if interrupted { 2 } else { 1 }, Ordering::SeqCst);
         job.signal.send_replace(true);
+        self.permissions.cancel_owner_now(id);
         self.update(id, true, |task| task.status = "cancelling".into());
         self.detail(id)
     }
@@ -469,9 +679,13 @@ impl Manager {
         let directory = self.root.join(id);
         fs::create_dir_all(&directory)?;
         let prompt = directory.join("system.txt");
+        let role = crate::agent_roles::resolve(&record.role)?;
         fs::write(
             &prompt,
-            format!("{DEFAULT_PROMPT}\n\n{}", record.system_prompt),
+            format!(
+                "{DEFAULT_PROMPT}\n\n{}\n\n{}",
+                role.prompt, record.system_prompt
+            ),
         )?;
         let mut args = vec![
             "--offline".into(),
@@ -481,7 +695,7 @@ impl Manager {
             "--no-prompt-templates".into(),
             "--no-context-files".into(),
             "--tools".into(),
-            READ_TOOLS.into(),
+            crate::agent_roles::tools_argument(role),
             "--exclude-tools".into(),
             "mcp__*".into(),
             "--model".into(),
@@ -493,6 +707,13 @@ impl Manager {
             "--session-dir".into(),
             directory.to_string_lossy().into_owned(),
         ];
+        args.extend([
+            "-e".into(),
+            self.permissions
+                .extension_path
+                .to_string_lossy()
+                .into_owned(),
+        ]);
         if resume {
             args.extend([
                 "--session".into(),
@@ -508,11 +729,17 @@ impl Manager {
             args.push("--approve".into());
         }
         let (completion, mut done) = watch::channel(Completion::Pending);
+        self.permissions.begin_owner(id);
+        let permission_ticket = self.permissions.ticket(id);
+        let binding = Arc::new(Mutex::new(std::sync::Weak::<Rpc>::new()));
+        let source_binding = binding.clone();
         let weak = Arc::downgrade(self);
         let task_id = id.to_owned();
         let sink: EventSink = Arc::new(move |event| {
             if let Some(manager) = weak.upgrade() {
-                manager.event(&task_id, &event);
+                if let Some(source) = source_binding.lock().unwrap().upgrade() {
+                    manager.event(&task_id, &event, &source, permission_ticket.clone());
+                }
             }
             if event["type"] == "agent_settled" {
                 completion.send_replace(Completion::Settled);
@@ -534,13 +761,21 @@ impl Manager {
                 &runner.prefix,
                 &args,
                 sink,
-                &[("PI_DESKTOP_TASK_ID".into(), id.into())],
+                &{
+                    let mut environment = self.permissions.environment();
+                    environment.push(("PI_DESKTOP_TASK_ID".into(), id.into()));
+                    environment
+                },
             )
             .await?;
             self.pids.lock().unwrap().insert(rpc.pid);
             *job.rpc.lock().unwrap() = Some(rpc.clone());
+            *binding.lock().unwrap() = Arc::downgrade(&rpc);
             rpc
         };
+        self.permissions
+            .verify(&rpc, &self.permissions.extension_path)
+            .await?;
         let state = rpc.call("get_state", json!({})).await?;
         let session = PathBuf::from(
             state["sessionFile"]
@@ -581,7 +816,47 @@ impl Manager {
         }
         Ok(())
     }
-    fn event(&self, id: &str, event: &Value) {
+    fn event(&self, id: &str, event: &Value, source: &Arc<Rpc>, permission_ticket: Option<String>) {
+        let valid = self
+            .jobs
+            .lock()
+            .unwrap()
+            .get(id)
+            .and_then(|job| job.rpc.lock().unwrap().clone())
+            .is_some_and(|rpc| Arc::ptr_eq(&rpc, source));
+        if !valid {
+            return;
+        }
+        if event["type"] == "extension_ui_request"
+            && event["method"] == "input"
+            && event["title"] == "PI_DESKTOP_PERMISSION_QUERY"
+        {
+            let manager = self.permissions.clone();
+            let rpc = source.clone();
+            let event = event.clone();
+            tokio::spawn(async move {
+                manager.answer_query(&rpc, &event).await;
+            });
+            return;
+        }
+        if event["type"] == "extension_ui_request"
+            && event["title"] == "PI_DESKTOP_PERMISSION"
+            && event["method"] == "input"
+        {
+            {
+                let cwd = self
+                    .records
+                    .lock()
+                    .unwrap()
+                    .get(id)
+                    .map(|task| task.cwd.clone());
+                if let Some(cwd) = cwd {
+                    self.permissions
+                        .enqueue(source.clone(), id, &cwd, event, permission_ticket);
+                }
+            }
+            return;
+        }
         self.update(id,event["type"]=="message_end",|task|{
             if !task.active(){return;}
             match event["type"].as_str().unwrap_or_default(){
@@ -734,7 +1009,84 @@ pub fn definition(agent_dir: &Path) -> Result<Value> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn index_follows_record_updates() {
+        use crate::index_store::IndexStore;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("agent");
+        std::fs::create_dir_all(&root).unwrap();
+        // 造一条历史记录，模拟上次运行留下的任务。
+        // 记录加载器要求 id 是合法 UUID 且文件名与 id 一致（见 Manager::new），所以这里必须用真 UUID。
+        const TASK_ID: &str = "11111111-1111-4111-8111-111111111111";
+        std::fs::write(
+            root.join(format!("{TASK_ID}.json")),
+            serde_json::to_vec(&serde_json::json!({
+                "id": TASK_ID, "task": "检查登录流程", "status": "completed", "createdAt": 1, "updatedAt": 1
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let manager = Manager::new(root, dir.path().join("lease")).unwrap();
+        let index = Arc::new(IndexStore::open(&dir.path().join("index.sqlite")).unwrap());
+        manager.attach_index(index.clone());
+
+        // 挂载即全量对齐：不用手点重建，启动后索引就是可用的
+        assert_eq!(index.count(), 1, "挂载时应当把已有记录全量对齐");
+        assert_eq!(
+            index
+                .search(&serde_json::json!({"query": "检查登录"}))
+                .unwrap()["total"],
+            1
+        );
+
+        // 记录变更后，flush 一次索引就跟上（界面每次列表查询前都会 flush）
+        manager.update(TASK_ID, true, |task| task.status = "failed".into());
+        manager.flush_index();
+        assert_eq!(
+            index
+                .search(&serde_json::json!({"status": "failed"}))
+                .unwrap()["total"],
+            1,
+            "变更后索引应当跟上"
+        );
+        assert_eq!(
+            index
+                .search(&serde_json::json!({"status": "completed"}))
+                .unwrap()["total"],
+            0
+        );
+    }
+
     use super::*;
+    #[test]
+    fn archive_rejects_completed_record_until_job_finishes_cleanup() {
+        let temp = tempfile::tempdir().unwrap();
+        let manager = Manager::new(temp.path().into(), temp.path().join("locks")).unwrap();
+        let id = Uuid::new_v4().to_string();
+        manager.records.lock().unwrap().insert(
+            id.clone(),
+            Task {
+                id: id.clone(),
+                status: "completed".into(),
+                ..Task::default()
+            },
+        );
+        let (signal, _) = watch::channel(false);
+        manager.jobs.lock().unwrap().insert(
+            id.clone(),
+            Arc::new(Job {
+                cancel: AtomicU8::new(0),
+                signal,
+                rpc: Mutex::new(None),
+                lease: Mutex::new(None),
+            }),
+        );
+        assert!(manager.archive(&id, true).is_err());
+        assert!(manager.output(&id, 0, None).is_err());
+        manager.jobs.lock().unwrap().remove(&id);
+        assert!(manager.archive(&id, true).is_ok());
+    }
     #[test]
     fn interrupted_task_is_loaded_without_automatic_execution() {
         let dir = tempfile::tempdir().unwrap();
@@ -742,6 +1094,7 @@ mod tests {
         let task = Task {
             id: id.clone(),
             status: "running".into(),
+            archived_at: Some(1),
             output: "已完成的部分".into(),
             ..Task::default()
         };

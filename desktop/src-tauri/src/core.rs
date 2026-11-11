@@ -24,6 +24,12 @@ pub struct Preferences {
     pub executable: String,
     pub last_workspace: String,
     pub recent_workspaces: Vec<String>,
+    /// 系统集成开关：需要在后端启动时读取，因此与其它偏好一起落地。
+    pub launch_at_login: bool,
+    pub close_to_tray: bool,
+    pub notifications: bool,
+    /// 归档任务的保留天数：0 表示永久保留（默认）。
+    pub archived_retention_days: i64,
 }
 #[derive(Clone)]
 pub struct Active {
@@ -57,6 +63,7 @@ pub struct Core {
     pub agents: Arc<crate::agents::Manager>,
     context_history: crate::context::History,
     context_settings: Mutex<Option<Value>>,
+    context_usage_cache: Mutex<Option<Value>>,
     bridge_token: String,
     bridge_path: PathBuf,
     task_actions: AsyncMutex<()>,
@@ -110,11 +117,19 @@ impl Core {
             &bridge_path,
             include_str!("../../extensions/desktop-context.mjs"),
         )?;
+        fs::write(
+            data_dir.join("desktop-permissions.mjs"),
+            include_str!("../../extensions/desktop-permissions.mjs"),
+        )?;
         let agents = crate::agents::Manager::new(
             data_dir.join("agents"),
             workspace::agent_dir().join("desktop-session-locks"),
         )?;
         let context_history = crate::context::History::new(data_dir.join("context-attempts.json"))?;
+        agents.permissions.protect(data_dir)?;
+        let agent_dir = workspace::agent_dir();
+        fs::create_dir_all(&agent_dir)?;
+        agents.permissions.protect(&agent_dir)?;
         Ok(Arc::new(Self {
             preferences: AsyncMutex::new(preferences),
             preference_path,
@@ -133,6 +148,7 @@ impl Core {
             agents,
             context_history,
             context_settings: Mutex::new(None),
+            context_usage_cache: Mutex::new(None),
             bridge_token: uuid::Uuid::new_v4().to_string(),
             bridge_path,
             task_actions: AsyncMutex::new(()),
@@ -161,6 +177,37 @@ impl Core {
             Value::Null
         };
         json!({"preferences":*self.preferences.lock().await,"agentDir":self.agent_dir,"version":env!("CARGO_PKG_VERSION"),"runtime":"tauri","recovery":recovery})
+    }
+    /// 更新归档保留期（天）。只接受固定档位，非法值直接拒绝而不是悄悄取默认。
+    pub async fn set_retention(&self, days: i64) -> Result<Preferences> {
+        if !crate::retention::is_valid_retention(days) {
+            anyhow::bail!("保留期只支持 0 / 90 / 180 / 365 天");
+        }
+        let mut next = self.preferences().await;
+        next.archived_retention_days = days;
+        self.save_preferences(next.clone()).await?;
+        Ok(next)
+    }
+
+    /// 更新系统集成开关，其余偏好保持不变。
+    pub async fn set_system_preferences(
+        &self,
+        launch_at_login: Option<bool>,
+        close_to_tray: Option<bool>,
+        notifications: Option<bool>,
+    ) -> Result<Preferences> {
+        let mut next = self.preferences().await;
+        if let Some(value) = launch_at_login {
+            next.launch_at_login = value;
+        }
+        if let Some(value) = close_to_tray {
+            next.close_to_tray = value;
+        }
+        if let Some(value) = notifications {
+            next.notifications = value;
+        }
+        self.save_preferences(next.clone()).await?;
+        Ok(next)
     }
     pub async fn preferences(&self) -> Preferences {
         self.preferences.lock().await.clone()
@@ -305,14 +352,11 @@ impl Core {
                 core.handle_event(generation, event);
             }
         });
-        let rpc = Rpc::spawn(
-            &executable,
-            &target,
-            &prefix,
-            &args,
-            sink,
-            &[("PI_DESKTOP_BRIDGE_TOKEN".into(), self.bridge_token.clone())],
-        )
+        let rpc = Rpc::spawn(&executable, &target, &prefix, &args, sink, &{
+            let mut environment = self.agents.permissions.environment();
+            environment.push(("PI_DESKTOP_BRIDGE_TOKEN".into(), self.bridge_token.clone()));
+            environment
+        })
         .await?;
         let active = Active {
             rpc: rpc.clone(),
@@ -320,7 +364,14 @@ impl Core {
             generation,
         };
         *self.active.write().await = Some(active.clone());
-        let result = self.snapshot_active(&active).await;
+        let result = async {
+            self.agents
+                .permissions
+                .verify(&rpc, &self.bridge_path)
+                .await?;
+            self.snapshot_active(&active).await
+        }
+        .await;
         match result {
             Ok(value) => {
                 if let Some(file) = value["state"]["sessionFile"].as_str() {
@@ -372,6 +423,68 @@ impl Core {
     }
     fn handle_event(self: &Arc<Self>, generation: u64, event: Value) {
         if generation != self.generation.load(Ordering::SeqCst) {
+            return;
+        }
+        if matches!(
+            event["type"].as_str(),
+            Some("compaction_start" | "compaction_end")
+        ) {
+            *self.context_usage_cache.lock().unwrap() = None;
+        }
+        if event["type"] == "extension_ui_request" && event["method"] == "notify" {
+            if let Some(raw) = event["message"]
+                .as_str()
+                .and_then(|s| s.strip_prefix("PI_DESKTOP_USAGE:"))
+            {
+                if raw.len() < 65536 {
+                    if let Ok(mut usage) = serde_json::from_str::<Value>(raw) {
+                        if !usage.is_object() {
+                            return;
+                        }
+                        usage["generation"] = json!(generation);
+                        *self.context_usage_cache.lock().unwrap() = Some(usage.clone());
+                        self.emit(generation, json!({"type":"context_usage","data":usage}));
+                    }
+                }
+                return;
+            }
+        }
+        if event["type"] == "extension_ui_request"
+            && event["method"] == "input"
+            && event["title"] == "PI_DESKTOP_PERMISSION_QUERY"
+        {
+            let core = self.clone();
+            tokio::spawn(async move {
+                if let Ok(active) = core.current().await {
+                    if active.generation == generation {
+                        core.agents
+                            .permissions
+                            .answer_query(&active.rpc, &event)
+                            .await;
+                    }
+                }
+            });
+            return;
+        }
+        if event["type"] == "extension_ui_request"
+            && event["method"] == "input"
+            && event["title"] == "PI_DESKTOP_PERMISSION"
+        {
+            let core = self.clone();
+            let ticket = self.agents.permissions.ticket("Pi");
+            tokio::spawn(async move {
+                if let Ok(active) = core.current().await {
+                    if active.generation == generation {
+                        core.agents.permissions.enqueue(
+                            active.rpc,
+                            "Pi",
+                            &active.cwd,
+                            &event,
+                            ticket,
+                        );
+                    }
+                }
+            });
             return;
         }
         if event["type"] == "tool_execution_start" && event["toolName"] == "desktop_scout" {
@@ -537,6 +650,125 @@ impl Core {
         let _gate = self.operation.lock().await;
         self.snapshot_active(&self.current().await?).await
     }
+    pub async fn prepare_message_edit(&self, session_id: &str, entry_id: &str) -> Result<Value> {
+        let _operation = self.operation.try_lock().context("上一个操作仍在处理中")?;
+        let active = self.current().await?;
+        let state = active.rpc.call("get_state", json!({})).await?;
+        if state["sessionId"] != session_id {
+            bail!("会话已切换，请重新选择要编辑的消息");
+        }
+        if active.rpc.busy.load(Ordering::SeqCst)
+            || state["isStreaming"] == true
+            || state["isCompacting"] == true
+            || state["pendingMessageCount"].as_u64().unwrap_or_default() > 0
+        {
+            bail!("请先停止当前任务再编辑消息");
+        }
+        {
+            let _launch = self.agents.launch_lock.lock().await;
+            let guard = self.guard.lock().unwrap();
+            guard
+                .as_ref()
+                .context("当前会话未保存，无法编辑历史消息")?
+                .validate_with_managed(active.rpc.pid, &self.agents.pids())?;
+        }
+        let candidates = active.rpc.call("get_fork_messages", json!({})).await?;
+        if !candidates["messages"].as_array().is_some_and(|messages| {
+            messages
+                .iter()
+                .any(|message| message["entryId"] == entry_id)
+        }) {
+            // A previous preparation may have persisted before its response was lost.
+            // Only the latest non-metadata entry on the active branch authorizes a retry.
+            let history = active.rpc.call("get_entries", json!({})).await?;
+            let prepared = history["entries"].as_array().is_some_and(|entries| {
+                let by_id: HashMap<_, _> = entries
+                    .iter()
+                    .filter_map(|entry| entry["id"].as_str().map(|id| (id, entry)))
+                    .collect();
+                let mut current = history["leafId"].as_str();
+                let mut seen = HashSet::new();
+                while let Some(id) = current {
+                    if !seen.insert(id) {
+                        break;
+                    }
+                    let Some(entry) = by_id.get(id) else {
+                        break;
+                    };
+                    if !["model_change", "thinking_level_change", "session_info"]
+                        .contains(&entry["type"].as_str().unwrap_or_default())
+                    {
+                        return entry["type"] == "custom"
+                            && entry["customType"] == "desktop-message-edit"
+                            && entry["data"]["entryId"] == entry_id;
+                    }
+                    current = entry["parentId"].as_str();
+                }
+                false
+            });
+            if !prepared {
+                bail!("该消息已不在当前会话分支中，请刷新后重新选择");
+            }
+        }
+        self.verify_context_bridge(&active).await?;
+        let result = async {
+            let nonce = uuid::Uuid::new_v4().to_string();
+            let prefix = format!("PI_DESKTOP_CONTEXT:{nonce}:");
+            let cursor = active.rpc.notification_cursor();
+            let payload = json!({"sessionId":session_id,"entryId":entry_id});
+            active
+                .rpc
+                .call(
+                    "prompt",
+                    json!({"message":format!("/desktop-context edit {nonce} {payload}")}),
+                )
+                .await?;
+            let response = active
+                .rpc
+                .notifications_after(cursor)
+                .iter()
+                .filter_map(|event| event["message"].as_str())
+                .find_map(|text| text.strip_prefix(&prefix))
+                .map(str::to_owned)
+                .context("Pi 未返回消息编辑结果")?;
+            let edited: Value = serde_json::from_str(&response)?;
+            if edited["ok"] != true {
+                bail!("{}", edited["error"].as_str().unwrap_or("无法准备消息编辑"));
+            }
+            if edited["cancelled"] == true {
+                return Ok(json!({"cancelled":true}));
+            }
+            *self.context_usage_cache.lock().unwrap() = None;
+            let snapshot = self.snapshot_active(&active).await?;
+            let file = PathBuf::from(
+                snapshot["state"]["sessionFile"]
+                    .as_str()
+                    .context("Pi 未返回当前会话路径")?,
+            );
+            if snapshot["state"]["sessionId"] != session_id
+                || snapshot["state"]["sessionFile"] != state["sessionFile"]
+            {
+                bail!("编辑消息时会话意外切换，请重新连接原会话");
+            }
+            if let Some(guard) = self.guard.lock().unwrap().as_mut() {
+                guard.baseline = session_guard::stamp(&file)?;
+                guard.expecting_write = false;
+            }
+            self.save_recovery(json!({"sessionPath":file,"cwd":active.cwd,"interrupted":false}));
+            Ok::<Value, anyhow::Error>(json!({"cancelled":false,"snapshot":snapshot}))
+        }
+        .await;
+        if result.is_err() {
+            active.rpc.stop().await;
+            self.active.write().await.take();
+            self.guard.lock().unwrap().take();
+            self.emit(
+                active.generation,
+                json!({"type":"transport_exit","message":"消息编辑准备失败，请重新连接原会话"}),
+            );
+        }
+        result
+    }
     pub async fn command(&self, kind: &str, mut data: Value) -> Result<Value> {
         if ![
             "prompt",
@@ -561,6 +793,15 @@ impl Core {
             Some(self.operation.try_lock().context("上一个操作仍在处理中")?)
         };
         let active = self.current().await?;
+        if let Some(expected) = data
+            .as_object_mut()
+            .and_then(|data| data.remove("expectedSessionId"))
+        {
+            let state = active.rpc.call("get_state", json!({})).await?;
+            if expected != state["sessionId"] {
+                bail!("会话已切换，消息保留在编辑框中");
+            }
+        }
         if kind != "prompt"
             && !["abort", "clear_queue"].contains(&kind)
             && active.rpc.busy.load(Ordering::SeqCst)
@@ -574,6 +815,9 @@ impl Core {
             }
         }
         if kind == "prompt" {
+            if !active.rpc.busy.load(Ordering::SeqCst) {
+                self.agents.permissions.begin_owner("Pi");
+            }
             if let Some(paths) = data.get("references") {
                 let paths: Vec<String> = serde_json::from_value(paths.clone())?;
                 let cwd = active.cwd.clone();
@@ -601,6 +845,9 @@ impl Core {
         } else {
             Duration::from_secs(120)
         };
+        if kind == "abort" {
+            self.agents.permissions.cancel_owner("Pi").await;
+        }
         let result = active.rpc.request(kind, data, duration).await;
         if result.is_ok() && kind == "set_model" {
             if let Ok(settings) = self.query_context_settings(&active, "get").await {
@@ -624,6 +871,7 @@ impl Core {
     }
     pub async fn stop(&self) -> Result<Value> {
         let active = self.current().await?;
+        self.agents.permissions.cancel_owner("Pi").await;
         {
             let _gate = self.task_actions.lock().await;
             for owner in self.delegations.lock().unwrap().drain() {
@@ -849,8 +1097,102 @@ impl Core {
             .map(|reserve| window.saturating_sub(reserve));
         let entries = history["entries"].as_array().context("会话历史无效")?;
         let session = state["sessionFile"].as_str().unwrap_or_default();
+        let reported_usage = self
+            .context_usage_cache
+            .lock()
+            .unwrap()
+            .as_ref()
+            .filter(|u| u["generation"] == active.generation && u["modelKey"] == model_key)
+            .map(|u| u["usage"].clone())
+            .filter(Value::is_object)
+            .unwrap_or_else(|| stats["contextUsage"].clone());
+        let usage = stats
+            .get("contextUsage")
+            .filter(|value| value.is_object())
+            .cloned()
+            .unwrap_or(reported_usage);
         Ok(
-            json!({"generation":active.generation,"model":public_model(&state["model"]),"modelKey":model_key,"enabled":state["autoCompactionEnabled"],"isCompacting":state["isCompacting"],"busy":active.rpc.busy.load(Ordering::SeqCst),"settings":settings,"triggerTokens":trigger,"usage":stats["contextUsage"],"totals":stats,"history":self.context_history.list(session,entries,history["leafId"].as_str()),"storageError":self.context_history.error()}),
+            json!({"generation":active.generation,"model":public_model(&state["model"]),"modelKey":model_key,"enabled":state["autoCompactionEnabled"],"isCompacting":state["isCompacting"],"busy":active.rpc.busy.load(Ordering::SeqCst),"settings":settings,"triggerTokens":trigger,"usage":usage,"estimated":true,"totals":stats,"history":self.context_history.list(session,entries,history["leafId"].as_str()),"storageError":self.context_history.error()}),
+        )
+    }
+    pub async fn permission_action(&self, payload: Value) -> Result<Value> {
+        match payload["action"].as_str().unwrap_or("status") {
+            "status" => Ok(self.agents.permissions.status()),
+            "reply" => {
+                if self.closing.load(Ordering::SeqCst) || self.connecting.load(Ordering::SeqCst) {
+                    bail!("Pi 正在连接或关闭，未批准工具操作");
+                }
+                self.agents
+                    .permissions
+                    .reply(
+                        payload["id"].as_str().context("缺少授权请求")?,
+                        payload["allow"].as_bool().context("缺少授权选择")?,
+                    )
+                    .await
+            }
+            "set" => {
+                let _gate = self.operation.lock().await;
+                if self.connecting.load(Ordering::SeqCst) || self.agents.busy() {
+                    bail!("请先结束当前任务再修改权限");
+                }
+                if let Ok(active) = self.current().await {
+                    let state = active.rpc.call("get_state", json!({})).await?;
+                    if active.rpc.busy.load(Ordering::SeqCst)
+                        || state["isStreaming"] == true
+                        || state["isCompacting"] == true
+                    {
+                        bail!("任务运行中不能修改权限");
+                    }
+                }
+                let mode = crate::permissions::Mode::parse(
+                    payload["mode"].as_str().context("缺少权限模式")?,
+                )?;
+                let rules = payload
+                    .get("rules")
+                    .cloned()
+                    .map(serde_json::from_value)
+                    .transpose()?;
+                self.agents.permissions.set(mode, rules)
+            }
+            _ => bail!("未知权限操作"),
+        }
+    }
+    pub async fn context_usage(&self) -> Result<Value> {
+        let active = self.current().await?;
+        let (state, stats) = tokio::try_join!(
+            active.rpc.call("get_state", json!({})),
+            active.rpc.call("get_session_stats", json!({}))
+        )?;
+        let model_key = format!(
+            "{}/{}",
+            state["model"]["provider"].as_str().unwrap_or_default(),
+            state["model"]["id"].as_str().unwrap_or_default()
+        );
+        let settings = self
+            .context_settings
+            .lock()
+            .unwrap()
+            .clone()
+            .filter(|s| s["modelKey"] == model_key);
+        let report = self
+            .context_usage_cache
+            .lock()
+            .unwrap()
+            .clone()
+            .filter(|u| u["generation"] == active.generation && u["modelKey"] == model_key);
+        let usage = stats
+            .get("contextUsage")
+            .filter(|value| value.is_object())
+            .cloned()
+            .or_else(|| {
+                report
+                    .as_ref()
+                    .map(|report| report["usage"].clone())
+                    .filter(Value::is_object)
+            })
+            .unwrap_or(Value::Null);
+        Ok(
+            json!({"generation":active.generation,"modelKey":model_key,"usage":usage,"window":state["model"]["contextWindow"],"estimated":true,"compacting":state["isCompacting"],"busy":active.rpc.busy.load(Ordering::SeqCst),"autoCompact":state["autoCompactionEnabled"],"reserveTokens":settings.and_then(|settings|settings["reserveTokens"].as_u64()),"cost":stats["cost"]}),
         )
     }
     pub async fn configure_context(&self, patch: Value) -> Result<Value> {
@@ -938,7 +1280,23 @@ impl Core {
         let (executable, prefix) = executable_for_connection(&preferences);
         let runner = crate::agents::Runner { executable, prefix };
         match operation {
-            "list" => Ok(self.agents.list()),
+            "list" => self.agents.query(&data),
+            "archive" | "restore" => self.agents.archive(id, operation == "archive"),
+            "output" => {
+                let offset = match data.get("offset") {
+                    None => 0,
+                    Some(value) => usize::try_from(value.as_u64().context("结果分页位置无效")?)?,
+                };
+                let version = data
+                    .get("version")
+                    .map(|v| v.as_str().context("结果版本无效"))
+                    .transpose()?
+                    .map(String::from);
+                let agents = self.agents.clone();
+                let id = id.to_owned();
+                tokio::task::spawn_blocking(move || agents.output(&id, offset, version.as_deref()))
+                    .await?
+            }
             "detail" => self.agents.detail(id),
             "definition" => {
                 let mut agent = crate::agents::definition(&self.agent_dir)?;
@@ -1017,6 +1375,7 @@ impl Core {
                             crate::agents::NewTask {
                                 task,
                                 cwd: active.cwd.clone(),
+                                role: data["role"].as_str().map(str::to_owned),
                                 parent_session: state["sessionFile"]
                                     .as_str()
                                     .unwrap_or_default()

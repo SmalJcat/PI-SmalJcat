@@ -148,7 +148,13 @@ function registerHandlers() {
     const result = await dialog.showOpenDialog(window, { title: '添加文本或图片', properties: ['openFile', 'multiSelections'] });
     return result.canceled ? [] : attachmentsFromPaths(result.filePaths);
   });
-  handle('reveal-workspace', () => shell.openPath(workspace || preferences.lastWorkspace || app.getPath('home')));
+  handle('reveal-workspace', async cwd => {
+    const target = cwd || workspace || preferences.lastWorkspace || app.getPath('home');
+    if (typeof target !== 'string' || !path.isAbsolute(target) || !(await stat(target)).isDirectory()) throw new Error('项目文件夹不存在或不是绝对路径。');
+    const error = await shell.openPath(target);
+    if (error) throw new Error(error);
+    return '';
+  });
   handle('reveal-config', () => shell.openPath(agentDir));
   handle('open-link', async url => {
     const parsed = new URL(url);
