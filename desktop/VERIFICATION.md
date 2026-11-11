@@ -1,5 +1,15 @@
 # Pi Desktop 发布验收
 
+## 0.7.1 正式包独立验收与集成检查（2026-11-11）
+
+- 当前代理由独立 Codex 进程承载。先正常关闭已安装的 Pi Desktop，并核对其正常退出标记及进程结束，再从 PowerShell 7 执行正式包验收。
+- 10:57 HKT，`npm run test:release` 的 5 项检查通过。10:58 HKT，`npm run test:release -- -Antigravity` 的 6 项检查通过，渲染错误 0、模型请求 0。真实 Pi 返回 10 个模型、32 项命令，4 个 MCP 服务均连接；官方 ACP 1.5.3 的模型读取、配置切换、断开及所属进程退出检查通过。窗口正常退出，退出标记已落盘。
+- 验收程序为 `release/tauri/Pi Desktop.exe`，17,845,248 字节，SHA-256 为 `c3bab6aafdca0a7eafc977ed4a6f6db6ed982e894745101a63049ced02c9cf85`，与安装目录 `%LOCALAPPDATA%\Programs\Pi Desktop\fdea6c4` 的程序和两份清单一致。构建来自干净提交 `6f57c22d7b193cf2801513c0586dbcb0b041ebf1`，139 个文件的源码指纹 `040db1027704595078f4a97dc7ca7d631b384200e096ce7a79f721da4ce737e4` 与当前源码重新计算的结果一致。
+- 集成前重新运行 `npm ci`、前端生产构建、JavaScript 116 项、常规 Rust 163 项、`test-fixture` Rust 165 项、格式检查及全目标严格 Clippy，均通过。两种 Rust 模式各有 4 项本机集成检查默认忽略。11:11 HKT，`npm run test:ui` 完成 64 项真实 WebView2 + Pi/ACP fixture 检查，渲染错误 0、模型请求 0。
+- 首次 Rust 检查的 8 项 loopback HTTP 测试因继承的 HTTP 代理及缺失的 `NO_PROXY` 返回 502。在本轮测试进程设置 `NO_PROXY=127.0.0.1,localhost,::1` 后，HTTP 专项和两种 Rust 全量均通过。首次失败日志及复跑日志一并保留。
+- 11:12 HKT，已从原安装入口重新打开 Pi Desktop，并核对运行路径、窗口及程序哈希。发布清单、两个程序副本、三份正式包回执及源码指纹的完整核对记录为 `artifacts/closeout-20261111-integrity.json`。
+- 正式包回执为 `artifacts/release-closeout-20261111-result.json`、`release-closeout-20261111-acp-result.json` 及 `tauri-release-result.json`，日志为 `release-closeout-20261111.log`、`release-closeout-20261111-acp.log`。集成检查汇总为 `artifacts/closeout-20261111-checks.json`，对应日志为 `closeout-20261111-*.log`，UI 回执为 `tauri-ui-result.json`。已查看 `closeout-20261111-pi.png`、`closeout-20261111-antigravity.png` 及本轮 fixture 截图，产物保存在被忽略的 `artifacts/`。
+
 ## 0.7.1 MCP HTTP 会话与通知（2026-11-10）
 
 - 新增会话标识复用、初始化通知、POST JSON/SSE 按 ID 匹配、GET 通知流与断线重连；工具列表变更/断流/恢复使缓存失效。过期 404 不重放失败工具，下一次显式操作可重新连接；连接与断开串行，避免旧握手在断开后插回会话。

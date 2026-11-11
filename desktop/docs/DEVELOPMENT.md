@@ -1,6 +1,6 @@
 # Pi Desktop 开发记录
 
-更新时间：2026-11-10（Asia/Hong_Kong）。当前开发版本：0.7.1。
+更新时间：2026-11-11（Asia/Hong_Kong）。当前开发版本：0.7.1。
 
 ## 目录与事实来源
 
@@ -142,6 +142,12 @@
 - `notifications/tools/list_changed` 使缓存失效，下次列工具时重新读取；没有自动刷新已展开面板。过期 404 取消该连接中的请求并显示未连接；失败的工具调用不重试，下一次显式操作可创建新会话。连接建立与断开串行，避免断开后旧握手重新插入。
 - curl 子进程在超时、断开、会话析构时终止；正常断开尽力 DELETE 会话。URL、认证头和正文通过 stdin 配置传递，关闭 URL globbing 和自动重定向；响应头、行、事件及 JSON 正文有大小上限。
 - 本轮只处理 tools 通道；resources/prompts、服务端请求（sampling/elicitation 等）、OAuth 及传统 HTTP+SSE 双端点仍未实现。GET 断流恢复依赖服务端是否支持事件重放，不自动重放 POST 或工具调用。
+
+## 2026-11-11：正式包独立验收与集成检查
+
+- 正常关闭已安装的桌面后，在独立 PowerShell 7 中完成 `npm run test:release`，并补跑官方 Antigravity CLI 检查。正式包 6 项检查通过，渲染错误 0、模型请求 0；实际程序哈希、安装副本、清单及源码指纹一致。
+- 重新安装锁定依赖并运行生产构建、JavaScript 116 项、常规 Rust 163 项、test-fixture Rust 165 项、格式和严格 Clippy，以及 WebView2 fixture 64 项，均通过。Rust 本机回环测试设置本轮进程的 `NO_PROXY` 后通过，首次代理返回 502 的日志保留。
+- 程序来源与验收回执、完整日志位置见 [验收记录](../VERIFICATION.md) 的 2026-11-11 记录。
 
 ## 后续优先级
 
