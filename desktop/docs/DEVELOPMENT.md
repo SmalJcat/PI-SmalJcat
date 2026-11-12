@@ -1,6 +1,6 @@
 # Pi Desktop 开发记录
 
-更新时间：2026-11-12（Asia/Hong_Kong）。当前开发版本：0.7.1；本轮 resources/prompts 增量在开发分支，尚未打包或部署。
+更新时间：2026-11-12（Asia/Hong_Kong）。当前开发版本：0.7.1；resources/prompts、编辑重发与 Fast 增量在开发分支，尚未打包或部署。
 
 ## 目录与事实来源
 
@@ -159,6 +159,13 @@
 - 资源/提示词目录不缓存，不自动遍历或重放；单页/内容超过 256 KiB 明确报错，避免破坏 URI、游标或 base64。切换面板后忽略旧响应。
 - 新增 stdio/HTTP 协议及浏览器回归，同一交互检查接入真实 WebView2 → Rust → 隔离 stdio fixture。实际执行结果见 [验收记录](../VERIFICATION.md)。
 - 本轮未接第三方 MCP Apps WebView、OAuth 或远程 TLS/代理兼容验证；未更新正式安装。现有 0.7.1 正式交付仍以 11 月 11 日记录为准。
+
+## 2026-11-12：编辑重发与 Fast（开发分支）
+
+- MCP 增量 `2056780` 已推送远端且 Windows Actions 成功。
+- 编辑后首次重发只跳过旧上下文用量触发的发送前阈值压缩。新消息进入分支后阈值保护恢复；manual/overflow 不拦截，不关闭用户全局自动压缩。
+- 模型弹层闪电改为 Fast 开关，适用 OpenAI Responses / Codex Responses / Chat Completions 传输；实际请求写入 priority/default，独立于推理档位，按会话分支/模型保存并支持编辑、重连恢复。服务端可能拒绝或不兑现优先档位，界面提示可能增加费用；Antigravity 暂无已验证接口。
+- JS 124、Rust 167/169、格式/Clippy及原生 WebView2 68项通过；真实 Pi + 本机提供方契约验证编辑重发只有一次请求、Fast载荷、手动压缩及溢出重试，外部模型请求0。详细记录见 [验收](../VERIFICATION.md)、[契约](EDIT-FAST.md)。
 
 ## 后续优先级
 

@@ -1,5 +1,16 @@
 # Pi Desktop 发布验收
 
+## 开发分支：编辑重发预检与 Fast 开关（2026-11-12）
+
+- 先将 MCP 内容增量提交为 `2056780` 并推送 `origin/feature/mcp-resources-prompts`；[对应 Windows Actions](https://github.com/SmalJcat/PI-SmalJcat/actions/runs/43158779341) 已成功。本节修复继续在同一分支，尚未打包或部署。
+- 编辑旧用户消息会回到父节点，后续压缩记录退出活动分支。新增策略仅在编辑标记仍为活动叶子的发送前检查取消 `threshold` 摘要；新用户消息追加后恢复通常阈值检查。手动压缩和真实溢出恢复保持原行为，未关闭全局自动压缩。Pi 仍可能短暂发出 start/aborted 事件，但不调用摘要模型。
+- 原先模型弹层左上角闪电只是静态 SVG；现接入会话/模型校验、原生操作锁和扩展请求钩子。OpenAI Responses / Codex Responses / Chat Completions 传输开启发送 `service_tier: priority`、显式关闭发送 `default`；推理强度独立。状态按会话分支/模型持久化，编辑时携带现有选择；不支持的后端禁用并说明原因。兼容网关或账号的优先处理资格及实际速度未经保证。
+- JavaScript **124 项**、常规 Rust **167 项**、test-fixture Rust **169 项**、TypeScript/Vite、格式及严格 Clippy 通过；Rust 两种模式各有 4 项真实环境检查默认忽略。Rust 追加 Fast 过期模型/请求校验、编辑准备后切档位幂等及运行中拒绝检查。
+- `npm run test:edit-fast:contract` 使用实际 `D:/PI/pi.exe`、临时会话/配置与本机 OpenAI 兼容服务，**4 类契约通过**：高用量历史编辑重发仅一次正常请求、实际 priority/default 参数与编辑/重连恢复、手动压缩、溢出摘要及自动重试。共 7 次本机模拟请求，外部模型请求 **0**。最初夹具历史/溢出输入不足以形成压缩切点，补足可压缩历史后通过；未放宽成功断言。
+- 13:51 HKT，真实 Tauri/WebView2 + Pi/ACP/MCP fixture **68 项**通过，渲染错误 **0**、模型请求 **0**。Fast 覆盖点击、Space、失败保持关闭、运行中禁用、不支持模型禁用及推理档位不变。已查看 `composer-fast-enabled.png`。debug 程序 SHA-256：`9439dea4a8ad99f546e1ed2fd1b5fbacb8c6ba33e97a1a6debdb008267c919aa`。
+- 证据：`artifacts/edit-fast-js.log`、`edit-fast-full-{rust,rust-fixture,fmt,clippy,ui}.log`、`edit-fast-checks.json`、`edit-fast-contract-result.json`、`edit-fast-contract-retry.log`、`edit-fast-ui-result.json`。独立只读核验未发现新缺陷。
+- 本机 Pi 的 provider 源码支持 service_tier 和请求钩子；官方 OpenAI 文档抓取返回 403，本轮未将其作为已核验来源。真实请求捕获使用 Chat Completions 兼容夹具；未实测付费远程优先档位、Codex 登录账号或 Antigravity Fast。详细契约见 [EDIT-FAST.md](docs/EDIT-FAST.md)。
+
 ## 开发分支：CI 与 MCP resources/prompts（2026-11-12）
 
 - 分支 `feature/mcp-resources-prompts`，基于 `ab3a388`；版本仍为 0.7.1。本轮未打包正式程序、部署或发布，安装版交付状态仍以下方 11 月 11 日记录为准。

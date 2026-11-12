@@ -20,6 +20,30 @@ export async function chooseModel(page, key) {
 
 export async function composerModelChecks(page, artifacts, checks) {
   let panel = await openModelPanel(page);
+  const fast = () => panel.getByRole('button', { name: 'Fast 模式', exact: true });
+  assert.equal(await fast().isEnabled(), true);
+  assert.equal(await fast().getAttribute('aria-pressed'), 'false');
+  const originalLevel = (await page.evaluate(() => window.pi.snapshot())).state.thinkingLevel;
+  await page.evaluate(() => {
+    const command = window.pi.command;
+    window.pi.command = async (type, data) => {
+      if (type === 'set_fast_mode') { window.pi.command = command; throw new Error('fixture fast rejected'); }
+      return command(type, data);
+    };
+  });
+  await fast().click();
+  await page.getByText('fixture fast rejected', { exact: true }).waitFor();
+  assert.equal(await fast().getAttribute('aria-pressed'), 'false');
+  await page.getByRole('button', { name: '关闭提示', exact: true }).click();
+  panel = await openModelPanel(page);
+  await fast().click();
+  await page.waitForFunction(async () => (await window.pi.snapshot()).state.fastMode?.enabled === true);
+  assert.equal((await page.evaluate(() => window.pi.snapshot())).state.thinkingLevel, originalLevel);
+  await page.waitForFunction(() => document.querySelector('[aria-label="Fast 模式"]')?.getAttribute('aria-pressed') === 'true');
+  await page.screenshot({ path: path.join(artifacts, 'composer-fast-enabled.png') });
+  await fast().press('Space');
+  await page.waitForFunction(async () => (await window.pi.snapshot()).state.fastMode?.enabled === false);
+  checks.push('Fast 闪电开关真实桥接保存、失败不伪装成功、键盘切换且推理强度不变');
   await panel.getByRole('button', { name: '选择模型', exact: true }).click();
   await page.evaluate(() => {
     const original = window.pi.command;
@@ -39,6 +63,7 @@ export async function composerModelChecks(page, artifacts, checks) {
   await page.keyboard.press('Enter');
   await page.waitForFunction(async () => (await window.pi.snapshot()).state.model.id === 'fixture-fast');
   assert.equal(await panel.getByRole('slider', { name: '推理强度', exact: true }).isDisabled(), true);
+  assert.equal(await fast().isDisabled(), true, 'Unsupported transport cannot enable Fast');
   assert.equal((await page.evaluate(() => window.pi.snapshot())).state.thinkingLevel, 'off');
   panel = await chooseModel(page, 'fixture::fixture-model');
   await page.getByRole('button', { name: '关闭提示', exact: true }).click();
@@ -78,6 +103,7 @@ export async function composerModelChecks(page, artifacts, checks) {
   await editor.fill('等待推理弹层 Escape 测试'); await editor.press('Enter');
   await page.getByRole('button', { name: '停止任务', exact: true }).waitFor();
   panel = await openModelPanel(page);
+  assert.equal(await fast().isDisabled(), true, 'Running turns block Fast changes');
   assert.equal(await panel.getByRole('slider', { name: '推理强度', exact: true }).isDisabled(), true);
   await page.keyboard.press('Escape');
   await panel.waitFor({ state: 'hidden' });

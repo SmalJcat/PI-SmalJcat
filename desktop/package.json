@@ -21,6 +21,7 @@
     "test:pi": "node scripts/native.mjs cargo run --manifest-path src-tauri/Cargo.toml --no-default-features --bin pi-rpc-check",
     "test:context": "node scripts/native.mjs cargo run --manifest-path src-tauri/Cargo.toml --no-default-features --bin pi-workspace-check",
     "test:agent:contract": "node tests/agent-contract.mjs",
+    "test:edit-fast:contract": "node tests/edit-fast-contract.mjs",
     "package": "node scripts/package-native.mjs",
     "build:test": "npm run build && node scripts/native.mjs cargo build --manifest-path src-tauri/Cargo.toml --locked --no-default-features --features test-fixture --bin pi-session-lease --bin acp-fixture --bin mcp-fixture && node scripts/native.mjs build --debug --no-bundle --features test-fixture",
     "legacy:dev": "node scripts/dev.mjs",
