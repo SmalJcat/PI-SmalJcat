@@ -1,3 +1,4 @@
+import { mcpContentChecks } from './mcp-content-ui.mjs';
 import {composerStatusChecks} from './composer-status-ui.mjs';
 import { piMessageChecks } from './message-actions-ui.mjs';
 import { antigravityChecks, officialAntigravityChecks } from './antigravity-ui.mjs';
@@ -34,6 +35,12 @@ const resultFile = path.join(artifacts, `tauri-${mode}-result.json`);
 await writeFile(resultFile, JSON.stringify({ success: false, mode, version, startedAt: new Date().toISOString() }, null, 2) + '\n');
 if (!real) {
   await mkdir(work); await mkdir(path.join(work, 'src'));
+  await mkdir(path.join(temp, 'agent'), { recursive: true });
+  const mcpFixture = path.join(root, 'src-tauri/target/debug/mcp-fixture.exe');
+  await writeFile(path.join(temp, 'agent/mcp.json'), JSON.stringify({ mcpServers: {
+    content: { command: mcpFixture, args: ['--content-only'] },
+    'tool-server': { command: mcpFixture },
+  } }));
   await writeFile(path.join(work, 'README.md'), '# Pi Desktop 测试项目\n\n这是文件预览内容。');
   await writeFile(path.join(work, 'src/main.ts'), 'export const ready = true;\n');
   await exec('git',['init'],{cwd:work});await exec('git',['add','.'],{cwd:work});
@@ -345,6 +352,7 @@ try {
     await page.getByRole('button',{name:'刷新状态',exact:true}).waitFor();
     await page.screenshot({path:path.join(artifacts,'v03-mcp.png')});await page.keyboard.press('Escape');
     checks.push('MCP状态、错误详情与会话内重连');
+    await mcpContentChecks(page, artifacts, checks);
     await editor.fill('检查 @src/ma');
     await page.getByRole('listbox',{name:'文件引用'}).waitFor();await editor.press('Enter');
     await page.getByRole('button',{name:'移除引用 src/main.ts',exact:true}).waitFor();

@@ -1,5 +1,18 @@
 # Pi Desktop 发布验收
 
+## 开发分支：CI 与 MCP resources/prompts（2026-11-12）
+
+- 分支 `feature/mcp-resources-prompts`，基于 `ab3a388`；版本仍为 0.7.1。本轮未打包正式程序、部署或发布，安装版交付状态仍以下方 11 月 11 日记录为准。
+- 新增 stdio / Streamable HTTP 资源、资源模板与提示词分页枚举，资源读取及提示词获取；连接不再强制 tools/list，握手能力透传到界面。独立核验发现提示词 `resource_link` 的 URI 丢失，已补名称、URI、MIME 与回归。
+- `npm ci`、TypeScript/Vite 构建、JavaScript **120 项**、常规 Rust **167 项**、test-fixture Rust **169 项**、格式检查及全目标严格 Clippy 通过。两种 Rust 模式各有 **4 项**需要本机真实配置的检查默认忽略。
+- 协议回归覆盖无 tools 能力服务器、三类目录分页与不透明游标、文本/二进制内容、HTTP SSE 资源结果、提示词参数与错误、无能力拒绝、格式错误和 256 KiB 超限；MCP 定向测试 **14 项**通过，另有 1 项真实配置测试默认忽略。
+- 使用 CI 同款 Playwright Chromium、`CI=true` 运行侧栏 **18 类**检查与 MCP 浏览器 **4 类**检查通过。MCP 覆盖参数校验不发请求、HTML 保持纯文本、切换后迟到响应隔离及 1440/1024px 布局。侧栏首次因焦点滚动事件晚于菜单打开而超时，增加滚动完成后键盘激活的等待后通过；启动失败清理及失败截图/回执已补齐。
+- 11:21 HKT，真实 Tauri / WebView2 + 隔离 Pi/ACP/MCP fixture **67 项**通过，渲染错误 **0**，模型请求 **0**。新增 3 类 MCP 检查完整通过界面 → Rust → stdio 子进程；夹具配置只写临时 agent/mcp.json。debug 程序 SHA-256：`18a472154e6798485ddc6390a9df2a3c2285c501988541c10cbb082da9489825`。已查看本轮浏览器及原生资源/提示词截图。
+- 环境排障：Playwright 下载最初继承失效代理 `127.0.0.1:7892`，仅在下载进程清空代理后成功；原生验收首次在构建阶段因临时脚本残留空 CI 变量失败，移除该环境变量后完整重跑通过。未修改用户代理配置。
+- CI 工作流已新增 Chromium、侧栏/MCP 浏览器、fixture Rust、loopback NO_PROXY 及浏览器产物上传；本轮仅在本机执行这些命令，**未运行远端 GitHub Actions**。
+- 证据：`artifacts/mcp-content-full-{build,js,rust,rust-fixture,fmt,clippy,ui}.log`、`mcp-content-sidebar-retry.log`、`mcp-content-browser-final.log`；回执 `sidebar/result.json`、`mcp-content/result.json`、`mcp-content-ui-result.json`；截图 `mcp-resource.png`、`mcp-prompt.png` 及 `mcp-content/`。首次失败日志保留。
+- 验证边界：HTTP 使用本机 loopback 服务；未实测第三方远端 TLS/代理/OAuth，未将 MCP Apps 演示 catalog/result 接成真实第三方 WebView。资源/提示词暂不支持订阅与 completion，二进制只展示说明，不自动下载或执行内容。
+
 ## 0.7.1 Windows CI 路径别名修复与正式交付（2026-11-11）
 
 - [PR #2](https://github.com/SmalJcat/PI-SmalJcat/pull/2) 的首次 Windows CI 在受保护配置写入检查中失败。使用 Windows 8.3 短路径作为本机 `TEMP` / `TMP`，复现了相同的 `Some(true)` / `None` 断言差异。

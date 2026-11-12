@@ -138,8 +138,8 @@ const scenarios = [
     await c.page.getByRole('dialog').waitFor();
     await c.page.locator('.mcp-card').first().waitFor({ timeout: 15000 }).catch(() => {});
     await shoot('mcp-session', 'MCP · Pi 会话');
-    const debugTab = c.page.getByRole('tab', { name: '工具调试', exact: true });
-    if (await debugTab.count()) { await debugTab.click(); await delay(300); await shoot('mcp-debug', 'MCP · 工具调试'); }
+    const debugTab = c.page.getByRole('tab', { name: '桌面调试', exact: true });
+    if (await debugTab.count()) { await debugTab.click(); await delay(300); await shoot('mcp-debug', 'MCP · 桌面调试'); }
     await c.closeDialog();
   } },
   { id: 'settings', title: '设置（全部分区）', async run(c, shoot) {

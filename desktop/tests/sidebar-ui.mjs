@@ -7,14 +7,15 @@ import assert from 'node:assert/strict';
 const artifacts = 'artifacts/sidebar';
 await mkdir(artifacts, { recursive: true });
 const server = await createServer({ server: { host: '127.0.0.1', port: 0 } });
-await server.listen();
-const browser = await chromium.launch({ headless: true, executablePath: [
-  `${process.env['ProgramFiles(x86)']}\\Microsoft\\Edge\\Application\\msedge.exe`,
-  `${process.env.ProgramFiles}\\Google\\Chrome\\Application\\chrome.exe`,
-].find(existsSync) });
+let browser, page;
 const errors = [];
 try {
-  const page = await browser.newPage({ viewport: { width: 1440, height: 960 }, reducedMotion: 'reduce' });
+  await server.listen();
+  browser = await chromium.launch({ headless: true, executablePath: process.env.CI ? undefined : [
+    `${process.env['ProgramFiles(x86)']}\\Microsoft\\Edge\\Application\\msedge.exe`,
+    `${process.env.ProgramFiles}\\Google\\Chrome\\Application\\chrome.exe`,
+  ].find(existsSync) });
+  page = await browser.newPage({ viewport: { width: 1440, height: 960 }, reducedMotion: 'reduce' });
   page.on('pageerror', error => errors.push(error.message));
   const initializeFixture = () => {
     const model = { id: 'fixture', name: 'Fixture', provider: 'local', reasoning: true, input: ['text'], contextWindow: 128000 };
@@ -119,7 +120,12 @@ try {
   await page.setViewportSize({ width: 1024, height: 768 });
   const openOptions = async name => {
     const button = page.getByRole('button', { name: `项目选项 ${name}`, exact: true });
-    await button.focus(); await button.press('Enter');
+    await button.scrollIntoViewIfNeeded();
+    await button.focus();
+    // Keyboard activation follows the focus scroll. Let Chromium deliver that
+    // scroll before opening a menu that intentionally dismisses on scrolling.
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    await button.press('Enter');
     await page.getByRole('menu', { name: `${name} 项目选项`, exact: true }).waitFor();
   };
   await openOptions('modem');
@@ -195,4 +201,8 @@ try {
   assert.deepEqual(errors, []);
   await writeFile(`${artifacts}/result.json`, JSON.stringify({ success: true, errors, checks: ['multi-project grouping', 'active older session', 'show more', 'pin and collapse persistence', 'archive persistence and restore', 'open archived conversation', 'archive view survives sidebar hiding', 'search across collapsed projects', 'current scope', 'session and project actions', 'running guard', '1440/1024/900 geometry', 'project menu open folder / edit / pin', 'sections create move rename delete persistence', 'scoped archive', 'remove and restore persistence', 'menu viewport bounds and Escape focus', 'touch project controls visible and menu opens'] }, null, 2));
   console.log('Sidebar UI checks passed; screenshots: artifacts/sidebar');
-} finally { await browser.close(); await server.close(); }
+} catch (error) {
+  await page?.screenshot({ path: `${artifacts}/failure.png` }).catch(() => {});
+  await writeFile(`${artifacts}/result.json`, JSON.stringify({ success: false, errors, error: String(error) }, null, 2));
+  throw error;
+} finally { try { await browser?.close(); } finally { await server.close(); } }

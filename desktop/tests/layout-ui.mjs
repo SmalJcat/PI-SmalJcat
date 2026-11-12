@@ -63,8 +63,8 @@ export async function layoutChecks(page, artifacts, checks) {
   assert.ok(content.y + content.height <= box.bottom + 1, 'Settings scroll area stays inside the dialog');
   await page.screenshot({ path: path.join(artifacts, 'v051-settings-small.png') });
   await nav.getByRole('button', { name: 'MCP', exact: true }).click();
-  await page.getByRole('tab', { name: '工具调试', exact: true }).click();
-  await page.getByText('桌面工具调试', { exact: true }).waitFor();
+  await page.getByRole('tab', { name: '桌面调试', exact: true }).click();
+  await page.getByText('桌面 MCP 调试', { exact: true }).waitFor();
   await page.getByRole('tab', { name: 'Pi 会话', exact: true }).click();
   await page.getByRole('button', { name: '刷新状态', exact: true }).waitFor();
   await close();

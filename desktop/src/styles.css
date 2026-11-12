@@ -41,7 +41,12 @@
 
 /* P1.2 MCP 连接卡片：服务器行、工具列表与调用面板。 */
 .mcp-warnings { margin: 6px 0; padding-left: 18px; font-size: 10px; color: #f7d4a3; }
-.mcp-tools { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.mcp-tools, .mcp-content-panel { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; min-width: 0; }
+.mcp-tools-card .setting-help { margin: 4px 0; }
+.mcp-tools-card .settings-actions, .mcp-tools-card .diagnostics { margin-top: 4px; }
+.mcp-tools-card .mcp-servers { max-height: none; overflow: visible; }
+.mcp-content-panel .mcp-tool, .mcp-content-panel .mcp-result, .mcp-content-panel code { overflow-wrap: anywhere; }
+.mcp-tools [aria-pressed="true"] { border-color: var(--muted); background: rgba(255, 255, 255, 0.08); }
 .mcp-tool-list { list-style: none; margin: 0; padding: 0; max-height: 220px; overflow: auto; display: flex; flex-direction: column; gap: 4px; }
 .mcp-tool { display: flex; flex-direction: column; gap: 2px; width: 100%; text-align: left; padding: 7px 9px; border-radius: 6px; border: 1px solid transparent; }
 .mcp-tool:hover { background: rgba(255, 255, 255, 0.04); }

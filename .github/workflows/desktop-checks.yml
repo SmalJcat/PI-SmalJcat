@@ -15,7 +15,9 @@ jobs:
   windows:
     name: Windows checks
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
+    env:
+      NO_PROXY: 127.0.0.1,localhost,::1
     defaults:
       run:
         shell: pwsh
@@ -44,8 +46,26 @@ jobs:
             Write-Output "::error title=JavaScript test failure::$details"
           }
           exit $result
+      - name: Install browser for UI regressions
+        run: npx playwright install chromium
+      - name: Sidebar UI regression
+        timeout-minutes: 5
+        run: npm run test:sidebar
+      - name: MCP content UI regression
+        timeout-minutes: 5
+        run: npm run test:mcp:browser
       - run: npm run test:rust
+      - run: npm run test:rust:fixture
       - name: Check Rust formatting
         run: node scripts/native.mjs cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
       - name: Check Rust and desktop bridge
         run: node scripts/native.mjs cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --features test-fixture -- -D warnings
+      - name: Upload browser regression artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-browser-regressions
+          path: |
+            desktop/artifacts/sidebar
+            desktop/artifacts/mcp-content
+          if-no-files-found: ignore

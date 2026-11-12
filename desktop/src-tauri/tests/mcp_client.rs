@@ -93,8 +93,10 @@ async fn manager_connects_calls_and_disconnects_by_name() {
 
     let connected = manager.connect("fixture").await.unwrap();
     assert_eq!(connected["server"]["serverInfo"]["name"], "mcp-fixture");
-    assert_eq!(connected["server"]["toolCount"], 3);
-    assert_eq!(connected["tools"].as_array().unwrap().len(), 3);
+    assert_eq!(connected["server"]["toolCount"], 0);
+    assert!(connected["server"]["capabilities"]["tools"].is_object());
+    let tools = manager.tools("fixture", false).await.unwrap();
+    assert_eq!(tools["tools"].as_array().unwrap().len(), 3);
 
     // 第二次连接复用同一会话，不会重复拉起进程
     let again = manager.connect("fixture").await.unwrap();
@@ -172,6 +174,81 @@ async fn failing_launch_and_unknown_server_report_actionable_errors() {
     assert_eq!(server["missingEnv"][0], "PI_MCP_NOT_SET_AT_ALL");
 }
 
+#[tokio::test]
+async fn content_only_server_supports_paging_resources_templates_and_prompts() {
+    let dir = tempfile::tempdir().unwrap();
+    write_config(
+        dir.path(),
+        json!({"content": {"command":fixture_command(),"args":["--content-only"]}}),
+    );
+    let manager = McpManager::new(dir.path().to_path_buf());
+    let connected = manager.connect("content").await.unwrap();
+    assert!(connected["server"]["capabilities"].get("tools").is_none());
+    assert!(manager.tools("content", false).await.is_err());
+    let page = manager
+        .content_list("content", "resources", None)
+        .await
+        .unwrap();
+    assert_eq!(page["resources"][0]["uri"], "fixture://hello");
+    assert_eq!(page["nextCursor"], "下一页+/=");
+    let last = manager
+        .content_list("content", "resources", page["nextCursor"].as_str())
+        .await
+        .unwrap();
+    assert_eq!(last["resources"][0]["uri"], "fixture://binary");
+    assert!(last.get("nextCursor").is_none());
+    for (kind, key) in [("templates", "resourceTemplates"), ("prompts", "prompts")] {
+        let page = manager.content_list("content", kind, None).await.unwrap();
+        assert_eq!(page[key].as_array().unwrap().len(), 1);
+        let last = manager
+            .content_list("content", kind, page["nextCursor"].as_str())
+            .await
+            .unwrap();
+        assert!(last[key].as_array().unwrap().is_empty());
+        assert!(last.get("nextCursor").is_none());
+    }
+    let read = manager
+        .read_resource("content", "fixture://hello")
+        .await
+        .unwrap();
+    assert_eq!(read["result"]["contents"][0]["text"], "你好🙂 MCP resource");
+    let blob = manager
+        .read_resource("content", "fixture://binary")
+        .await
+        .unwrap();
+    assert_eq!(blob["result"]["contents"][0]["blob"], "AAEC");
+    let prompt = manager
+        .get_prompt("content", "greet", json!({"name":"世界"}))
+        .await
+        .unwrap();
+    assert_eq!(
+        prompt["result"]["messages"][0]["content"]["text"],
+        "Hello 世界"
+    );
+    for uri in [
+        "",
+        "fixture://missing",
+        "fixture://oversized",
+        "fixture://malformed",
+    ] {
+        assert!(
+            manager.read_resource("content", uri).await.is_err(),
+            "{uri}"
+        );
+    }
+    for arguments in [json!([]), json!({"name":1}), json!({})] {
+        assert!(manager
+            .get_prompt("content", "greet", arguments)
+            .await
+            .is_err());
+    }
+    assert!(manager
+        .get_prompt("content", "missing", json!({"name":"hi"}))
+        .await
+        .is_err());
+    manager.shutdown().await;
+}
+
 /// 可选的本机实测：读取真实 mcp.json 并连接其中的服务器（默认 rea）。
 /// 默认忽略，避免 CI 依赖本机环境；手动执行：
 ///   cargo test --no-default-features --test mcp_client -- --ignored --nocapture
@@ -195,7 +272,8 @@ async fn live_server_from_local_mcp_json() {
     let manager = McpManager::new(agent_dir);
     let started = std::time::Instant::now();
     let connected = manager.connect(&name).await.expect("connect");
-    let tools = connected["tools"].as_array().unwrap();
+    let listing = manager.tools(&name, false).await.expect("list tools");
+    let tools = listing["tools"].as_array().unwrap();
     println!(
         "{} 连接成功：serverInfo={} 工具 {} 个，握手+列举耗时 {:?}",
         name,

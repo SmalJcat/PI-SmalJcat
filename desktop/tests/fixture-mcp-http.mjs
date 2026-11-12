@@ -25,7 +25,8 @@ const server = http.createServer(async (req, res) => {
   if (message.method === 'initialize') {
     if (mode === 'slow') await new Promise(resolve => setTimeout(resolve, 300));
     const headers = mode === 'stateless' ? {} : { 'Mcp-Session-Id': mode === 'bad-session' ? 'invalid session' : 'fixture-session' };
-    json(res, 200, { jsonrpc: '2.0', id: message.id, result: { protocolVersion: '2025-06-18', serverInfo: { name: 'http-fixture', version: '1' }, capabilities: { tools: { listChanged: true } } } }, headers);
+    const capabilities = mode === 'content-only' ? { resources: {}, prompts: {} } : { tools: { listChanged: true } };
+    json(res, 200, { jsonrpc: '2.0', id: message.id, result: { protocolVersion: '2025-06-18', serverInfo: { name: 'http-fixture', version: '1' }, capabilities } }, headers);
     return;
   }
   if ((mode !== 'stateless' && req.headers['mcp-session-id'] !== 'fixture-session') || req.headers['mcp-protocol-version'] !== '2025-06-18') {
@@ -42,6 +43,38 @@ const server = http.createServer(async (req, res) => {
   }
   if (message.method === 'notifications/initialized') {
     res.writeHead(202);res.end();return;
+  }
+  if (mode === 'content-only') {
+    const reply = result => json(res, 200, { jsonrpc: '2.0', id: message.id, result });
+    const error = text => json(res, 200, { jsonrpc: '2.0', id: message.id, error: { code: -32602, message: text } });
+    const params = message.params || {};
+    if (message.method === 'resources/list') {
+      reply(params.cursor === undefined ? { resources: [{ name: 'hello', uri: 'fixture://hello' }], nextCursor: '下一页+/=' } : { resources: [{ name: 'binary', uri: 'fixture://binary' }] }); return;
+    }
+    if (message.method === 'resources/templates/list') {
+      reply(params.cursor === undefined ? { resourceTemplates: [{ name: 'named', uriTemplate: 'fixture://{name}' }], nextCursor: 'templates-2' } : { resourceTemplates: [] }); return;
+    }
+    if (message.method === 'resources/read') {
+      if (params.uri === 'fixture://hello') {
+        res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        sse(res, { jsonrpc: '2.0', id: message.id, result: { contents: [{ uri: params.uri, text: '你好🙂 HTTP resource', mimeType: 'text/plain' }] } });
+        return;
+      }
+      if (params.uri === 'fixture://binary') reply({ contents: [{ uri: params.uri, blob: 'AAEC', mimeType: 'application/octet-stream' }] });
+      else if (params.uri === 'fixture://oversized') reply({ contents: [{ uri: params.uri, text: 'x'.repeat(256 * 1024) }] });
+      else if (params.uri === 'fixture://malformed') reply({ contents: null });
+      else error('Resource not found');
+      return;
+    }
+    if (message.method === 'prompts/list') {
+      reply(params.cursor === undefined ? { prompts: [{ name: 'greet', arguments: [{ name: 'name', required: true }] }], nextCursor: 'prompts-2' } : { prompts: [] }); return;
+    }
+    if (message.method === 'prompts/get') {
+      if (params.name !== 'greet' || typeof params.arguments?.name !== 'string') error('Invalid prompt or missing name');
+      else reply({ messages: [{ role: 'user', content: { type: 'text', text: `Hello ${params.arguments.name}` } }] });
+      return;
+    }
+    error('Method unavailable'); return;
   }
   if (message.method === 'tools/list') {
     json(res, 200, { jsonrpc: '2.0', id: message.id, result: { tools: [{ name: `echo-${revision}`, inputSchema: { type: 'object' } }] } });return;

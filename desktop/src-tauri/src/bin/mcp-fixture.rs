@@ -7,6 +7,12 @@ fn main() {
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
     let mut writer = stdout.lock();
+    let content_only = std::env::args().any(|arg| arg == "--content-only");
+    let capabilities = if content_only {
+        json!({"resources": {}, "prompts": {}})
+    } else {
+        json!({"tools": {"listChanged": true}, "resources": {}, "prompts": {}})
+    };
     for line in stdin.lock().lines() {
         let Ok(line) = line else { break };
         if line.trim().is_empty() {
@@ -21,10 +27,15 @@ fn main() {
             // notification：夹具只需忽略
             continue;
         };
+        if content_only && method.starts_with("tools/") {
+            writeln!(writer, "{}", json!({"jsonrpc":"2.0", "id":id, "error":{"code":-32601,"message":"tools unavailable"}})).ok();
+            writer.flush().ok();
+            continue;
+        }
         let result = match method.as_str() {
             "initialize" => json!({
                 "protocolVersion": message["params"]["protocolVersion"].clone(),
-                "capabilities": { "tools": { "listChanged": true } },
+                "capabilities": capabilities,
                 "serverInfo": { "name": "mcp-fixture", "version": "1.0.0" },
             }),
             "tools/list" => json!({ "tools": [
@@ -34,6 +45,54 @@ fn main() {
                     "type": "object", "properties": { "a": { "type": "integer" }, "b": { "type": "integer" } }, "required": ["a", "b"] } },
                 { "name": "fail", "description": "总是失败", "inputSchema": { "type": "object", "properties": {} } },
             ] }),
+            "resources/list" => {
+                if message["params"].get("cursor").is_some() {
+                    json!({"resources":[{"uri":"fixture://binary","name":"binary","mimeType":"application/octet-stream"}]})
+                } else {
+                    json!({"resources":[{"uri":"fixture://hello","name":"hello","mimeType":"text/plain"}],"nextCursor":"下一页+/="})
+                }
+            }
+            "resources/templates/list" => {
+                if message["params"].get("cursor").is_some() {
+                    json!({"resourceTemplates":[]})
+                } else {
+                    json!({"resourceTemplates":[{"uriTemplate":"fixture://{name}","name":"named"}],"nextCursor":"templates-2"})
+                }
+            }
+            "resources/read" => match message["params"]["uri"].as_str().unwrap_or_default() {
+                "fixture://hello" => {
+                    json!({"contents":[{"uri":"fixture://hello","mimeType":"text/plain","text":"你好🙂 MCP resource"}]})
+                }
+                "fixture://binary" => {
+                    json!({"contents":[{"uri":"fixture://binary","mimeType":"application/octet-stream","blob":"AAEC"}]})
+                }
+                "fixture://oversized" => {
+                    json!({"contents":[{"uri":"fixture://oversized","text":"x".repeat(256 * 1024)}]})
+                }
+                "fixture://malformed" => json!({"contents":"invalid"}),
+                _ => {
+                    writeln!(writer, "{}", json!({"jsonrpc":"2.0", "id":id, "error":{"code":-32002,"message":"Resource not found"}})).ok();
+                    writer.flush().ok();
+                    continue;
+                }
+            },
+            "prompts/list" => {
+                if message["params"].get("cursor").is_some() {
+                    json!({"prompts":[]})
+                } else {
+                    json!({"prompts":[{"name":"greet","description":"Greeting","arguments":[{"name":"name","required":true}]}],"nextCursor":"prompts-2"})
+                }
+            }
+            "prompts/get" => {
+                if message["params"]["name"] != "greet"
+                    || !message["params"]["arguments"]["name"].is_string()
+                {
+                    writeln!(writer, "{}", json!({"jsonrpc":"2.0", "id":id, "error":{"code":-32602,"message":"Invalid prompt or missing name"}})).ok();
+                    writer.flush().ok();
+                    continue;
+                }
+                json!({"description":"Greeting", "messages":[{"role":"user","content":{"type":"text","text":format!("Hello {}",message["params"]["arguments"]["name"].as_str().unwrap())}}]})
+            }
             "tools/call" => {
                 let name = message["params"]["name"].as_str().unwrap_or_default();
                 let arguments = &message["params"]["arguments"];
