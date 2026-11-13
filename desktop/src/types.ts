@@ -93,7 +93,7 @@ export interface PiApi {
   mcpCall(options: { name: string; tool: string; arguments: Wire }): Promise<Wire>;
   mcpDisconnect(name: string): Promise<{ disconnected: string[] }>;
   mcpAppPrepare(options: { name: string; tool: string }): Promise<Wire>;
-  mcpAppOpen(options: { id: string; grantedTools: string[]; arguments: Wire; result: Wire }): Promise<Wire>;
+  mcpAppOpen(options: { id: string; grantedTools: string[]; allowResources?: boolean; arguments: Wire; result: Wire }): Promise<Wire>;
   mcpAppClose(id: string): Promise<Wire>;
   widgetCatalog(): Promise<Wire>;
   widgetOpen(options: { widget: string; requested: string[]; granted: string[]; data?: Wire }): Promise<Wire>;

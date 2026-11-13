@@ -558,9 +558,15 @@ async fn dispatch(
             let id = payload["id"].as_str().context("缺少 App 会话")?.to_owned();
             let grants: Vec<String> = serde_json::from_value(payload["grantedTools"].clone())
                 .context("App 工具授权格式无效")?;
+            let allow_resources = payload
+                .get("allowResources")
+                .map(|value| value.as_bool().context("App 资源授权必须为布尔值"))
+                .transpose()?
+                .unwrap_or(false);
             let label = apps.activate(
                 &id,
                 &grants,
+                allow_resources,
                 payload["arguments"].clone(),
                 payload["result"].clone(),
             )?;

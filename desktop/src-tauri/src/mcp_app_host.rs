@@ -154,6 +154,7 @@ struct AppState {
     initialized: bool,
     ready: bool,
     grants: HashSet<String>,
+    allow_resources: bool,
     pending: HashSet<String>,
     arguments: Value,
     result: Value,
@@ -176,6 +177,28 @@ struct App {
 struct RequestGuard {
     app: Arc<App>,
     key: String,
+}
+impl RequestGuard {
+    fn begin(app: &Arc<App>, id: &Value) -> Result<Self> {
+        if !app.connection.connected() {
+            bail!("MCP 连接已断开，请重新打开 App");
+        }
+        if !app.active.load(Ordering::SeqCst) {
+            bail!("App 已关闭");
+        }
+        let key = id.to_string();
+        let mut state = app.state.lock().unwrap();
+        if !state.ready {
+            bail!("App 尚未完成初始化");
+        }
+        if state.pending.len() >= 16 || !state.pending.insert(key.clone()) {
+            bail!("App 请求过多或 id 重复");
+        }
+        Ok(Self {
+            app: app.clone(),
+            key,
+        })
+    }
 }
 impl Drop for RequestGuard {
     fn drop(&mut self) {
@@ -254,6 +277,7 @@ impl McpAppHost {
         &self,
         id: &str,
         grants: &[String],
+        allow_resources: bool,
         arguments: Value,
         result: Value,
     ) -> Result<String> {
@@ -282,10 +306,16 @@ impl McpAppHost {
             }
         }
         state.grants = grants.iter().cloned().collect();
+        state.allow_resources = allow_resources;
         state.arguments = arguments;
         state.result = result;
         app.active.store(true, Ordering::SeqCst);
-        self.record(id, "open", true, "App 已打开");
+        self.record(
+            id,
+            "open",
+            true,
+            &format!("App 已打开，资源读取授权={allow_resources}"),
+        );
         Ok(format!("widget-app-{id}"))
     }
 
@@ -416,6 +446,7 @@ impl McpAppHost {
                     "ui/initialize"
                         | "ui/notifications/initialized"
                         | "tools/call"
+                        | "resources/read"
                         | "ping"
                         | "notifications/message"
                         | "ui/notifications/size-changed"
@@ -460,12 +491,16 @@ impl McpAppHost {
                 let mut state = app.state.lock().unwrap();
                 state.initialized = true;
                 state.ready = false;
+                let mut capabilities = json!({"serverTools":{},"logging":{},
+                    "sandbox":{"permissions":{},"csp":app.domains}});
+                if state.allow_resources {
+                    capabilities["serverResources"] = json!({});
+                }
                 Ok((
                     json!({
                         "protocolVersion":UI_VERSION,
                         "hostInfo":{"name":"Pi Desktop","version":env!("CARGO_PKG_VERSION")},
-                        "hostCapabilities":{"serverTools":{},"logging":{},
-                            "sandbox":{"permissions":{},"csp":app.domains}},
+                        "hostCapabilities":capabilities,
                         "hostContext":{"toolInfo":{"tool":app.tool},"theme":"dark",
                             "displayMode":"inline","availableDisplayModes":["inline"],
                             "platform":"desktop","containerDimensions":{"width":720,"height":560}},
@@ -496,6 +531,37 @@ impl McpAppHost {
                 Ok((json!({}), vec![]))
             }
             "ui/request-display-mode" if !notification => Ok((json!({"mode":"inline"}), vec![])),
+            "resources/read" if !notification => {
+                if !app.state.lock().unwrap().allow_resources {
+                    bail!("App 未获授权读取服务器资源");
+                }
+                let uri = params["uri"].as_str().context("缺少资源 URI")?;
+                if uri.is_empty()
+                    || uri.len() > 4096
+                    || uri.bytes().any(|byte| byte <= 0x20 || byte == 0x7f)
+                    || url::Url::parse(uri).is_err()
+                {
+                    bail!("资源 URI 必须为不超过 4096 字节的绝对 URI");
+                }
+                let _request = RequestGuard::begin(&app, &message["id"])?;
+                let result = app
+                    .connection
+                    .content_request(
+                        "resources",
+                        "resources/read",
+                        json!({"uri":uri}),
+                        Some(&app.active),
+                    )
+                    .await
+                    .context("MCP 资源读取失败，请查看宿主审计")?;
+                if !app.active.load(Ordering::SeqCst) {
+                    bail!("App 已关闭");
+                }
+                if !result["contents"].is_array() {
+                    bail!("resources/read 返回缺少 contents 数组");
+                }
+                Ok((result, vec![]))
+            }
             "tools/call" if !notification => {
                 let name = params["name"].as_str().context("缺少工具名称")?;
                 let arguments = params
@@ -505,23 +571,10 @@ impl McpAppHost {
                 if !arguments.is_object() {
                     bail!("工具参数必须为对象");
                 }
-                let key = message["id"].to_string();
-                {
-                    let mut state = app.state.lock().unwrap();
-                    if !state.ready || !state.grants.contains(name) {
-                        bail!("App 未获授权调用工具 {name}");
-                    }
-                    if state.pending.len() >= 16 || !state.pending.insert(key.clone()) {
-                        bail!("App 请求过多或 id 重复");
-                    }
+                if !app.state.lock().unwrap().grants.contains(name) {
+                    bail!("App 未获授权调用工具 {name}");
                 }
-                let _request = RequestGuard {
-                    app: app.clone(),
-                    key,
-                };
-                if !app.connection.connected() {
-                    bail!("MCP 连接已断开，请重新打开 App");
-                }
+                let _request = RequestGuard::begin(&app, &message["id"])?;
                 let tools = app
                     .connection
                     .app_tools()

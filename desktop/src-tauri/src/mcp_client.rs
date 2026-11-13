@@ -726,17 +726,18 @@ impl McpSession {
         Ok(tools.clone())
     }
 
-    async fn content_request(
+    pub(crate) async fn content_request(
         &self,
         capability: &str,
         method: &str,
         params: Value,
+        permit: Option<&AtomicBool>,
     ) -> Result<Value> {
         if !self.capabilities.lock().unwrap()[capability].is_object() {
             bail!("服务器未声明 {capability} 能力");
         }
         let result = self
-            .request(method, params, self.config.tool_timeout())
+            .request_guarded(method, params, self.config.tool_timeout(), permit)
             .await?;
         // 不截断结构化内容：URI、分页游标和 base64 都必须保持完整。
         if serde_json::to_vec(&result)?.len() > MAX_RESULT {
@@ -939,7 +940,9 @@ impl McpManager {
         };
         let session = self.session(name).await?;
         let params = cursor.map_or_else(|| json!({}), |cursor| json!({"cursor": cursor}));
-        let result = session.content_request(capability, method, params).await?;
+        let result = session
+            .content_request(capability, method, params, None)
+            .await?;
         if !result[field].is_array() {
             bail!("{method} 返回缺少 {field} 数组");
         }
@@ -962,7 +965,7 @@ impl McpManager {
         }
         let session = self.session(name).await?;
         let result = session
-            .content_request("resources", "resources/read", json!({"uri": uri}))
+            .content_request("resources", "resources/read", json!({"uri": uri}), None)
             .await?;
         if !result["contents"].is_array() {
             bail!("resources/read 返回缺少 contents 数组");
@@ -986,6 +989,7 @@ impl McpManager {
                 "prompts",
                 "prompts/get",
                 json!({"name": prompt, "arguments": arguments}),
+                None,
             )
             .await?;
         if !result["messages"].is_array() {
@@ -1018,6 +1022,66 @@ impl McpManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn resource_reads_queued_on_stdio_recheck_revoked_permission_before_writing() {
+        let root = tempfile::tempdir().unwrap();
+        let script = r#"
+let reads=0;
+require('node:readline').createInterface({input:process.stdin}).on('line',line=>{
+  const request=JSON.parse(line);
+  if(request.id===undefined)return;
+  const result=request.method==='initialize'
+    ? {protocolVersion:'2025-06-18',capabilities:{resources:{}},serverInfo:{name:'guard',version:'1'}}
+    : {contents:[{uri:request.params.uri,text:String(++reads)}]};
+  process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:request.id,result})+'\n');
+});
+"#;
+        fs::write(
+            root.path().join("mcp.json"),
+            json!({"mcpServers":{"guard":{"command":"node","args":["-e",script]}}}).to_string(),
+        )
+        .unwrap();
+        let session = McpSession::connect(find_server(root.path(), "guard").unwrap())
+            .await
+            .unwrap();
+        let writer = session.stdin.lock().await;
+        let permit = Arc::new(AtomicBool::new(true));
+        let pending_session = session.clone();
+        let pending_permit = permit.clone();
+        let pending = tokio::spawn(async move {
+            pending_session
+                .content_request(
+                    "resources",
+                    "resources/read",
+                    json!({"uri":"fixture://queued"}),
+                    Some(&pending_permit),
+                )
+                .await
+        });
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while session.pending.lock().unwrap().is_empty() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        permit.store(false, Ordering::SeqCst);
+        drop(writer);
+        assert!(pending.await.unwrap().is_err());
+        assert!(session.pending.lock().unwrap().is_empty());
+        let result = session
+            .content_request(
+                "resources",
+                "resources/read",
+                json!({"uri":"fixture://next"}),
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(result["contents"][0]["text"], "1");
+        session.shutdown().await;
+    }
 
     #[test]
     fn env_expansion_reports_missing_names_once() {

@@ -9,6 +9,9 @@
 <button id="refresh">刷新服务器数据</button>
 <button id="denied">调用未授权工具</button>
 <button id="unsupported">请求宿主文件</button>
+<button id="read-resource">读取服务器资源</button>
+<button id="read-blob">读取二进制资源</button>
+<pre id="capabilities"></pre>
 <pre id="output"></pre>
 <pre id="isolation"></pre>
 <script>
@@ -46,6 +49,8 @@ const run = async (method, params) => {
 document.getElementById('refresh').onclick = () => run('tools/call', {name:'app_refresh',arguments:{count:42}});
 document.getElementById('denied').onclick = () => run('tools/call', {name:'echo',arguments:{text:'unauthorized'}});
 document.getElementById('unsupported').onclick = () => run('host/read-file', {path:'private'});
+document.getElementById('read-resource').onclick = () => run('resources/read', {uri:'fixture://hello'});
+document.getElementById('read-blob').onclick = () => run('resources/read', {uri:'fixture://binary'});
 try {
   window.parent.document.title;
   document.getElementById('isolation').textContent = 'parent-accessible';
@@ -54,7 +59,8 @@ try {
 }
 request('ui/initialize', {
   protocolVersion:'2026-01-26',appInfo:{name:'fixture-app',version:'1'},appCapabilities:{},
-}).then(() => {
+}).then(result => {
+  document.getElementById('capabilities').textContent = JSON.stringify(result.hostCapabilities || {});
   window.parent.postMessage({jsonrpc:'2.0',method:'ui/notifications/initialized',params:{}}, '*');
 }).catch(error => { output.textContent = error.message; });
 </script>
