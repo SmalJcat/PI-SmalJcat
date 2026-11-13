@@ -48,6 +48,17 @@ try {
   await frame.locator('#output').filter({hasText:'"count":42'}).waitFor();
   await page.screenshot({path:artifacts+'/frame.png'});
   checks.push('工具请求与协议成功/错误结果双向转发');
+  await frame.locator('#read-resource').click();
+  await frame.locator('#output').filter({hasText:'denied'}).waitFor();
+  await page.evaluate(()=>{window.appHost.allowResources=true;});
+  await frame.locator('#read-resource').click();
+  await frame.locator('#output').filter({hasText:'你好🙂 browser resource'}).waitFor();
+  await frame.locator('#read-blob').click();
+  await frame.locator('#output').filter({hasText:'"blob":"AAEC"'}).waitFor();
+  assert.deepEqual(await frame.locator('#output').evaluate(el=>JSON.parse(el.textContent)),{
+    contents:[{uri:'fixture://binary',mimeType:'application/octet-stream',blob:'AAEC'}],
+  });
+  checks.push('资源请求、默认拒绝与完整 text/blob 结果转发');
   await page.evaluate(()=>{window.appHost.hold=true;});
   await frame.locator('#refresh').click();
   await page.waitForFunction(()=>typeof window.appHost.release==='function');

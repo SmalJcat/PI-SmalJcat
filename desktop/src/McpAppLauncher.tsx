@@ -6,6 +6,7 @@ export function McpAppLauncher({ name, tool, arguments: args, result, onError }:
 }) {
   const [prepared, setPrepared] = useState<Wire | null>(null);
   const [grants, setGrants] = useState<string[]>([]);
+  const [allowResources, setAllowResources] = useState(false);
   const [busy, setBusy] = useState(false);
   const [opened, setOpened] = useState(false);
   const mounted = useRef(true);
@@ -29,6 +30,7 @@ export function McpAppLauncher({ name, tool, arguments: args, result, onError }:
       }
       session.current = {id:data.id,retain:false};
       setGrants([]);
+      setAllowResources(false);
       setPrepared(data);
     } catch (error) { if (mounted.current) onError(error); }
     finally { if (mounted.current) setBusy(false); }
@@ -38,7 +40,7 @@ export function McpAppLauncher({ name, tool, arguments: args, result, onError }:
     setBusy(true);
     session.current.retain = true;
     try {
-      await window.pi.mcpAppOpen({id:prepared.id,grantedTools:grants,arguments:args,result});
+      await window.pi.mcpAppOpen({id:prepared.id,grantedTools:grants,allowResources,arguments:args,result});
       if (mounted.current) setOpened(true);
     } catch (error) {
       session.current.retain = false;
@@ -61,6 +63,11 @@ export function McpAppLauncher({ name, tool, arguments: args, result, onError }:
         <span><code>{item.name}</code><small>{item.description}</small></span>
       </label>)}
     </fieldset>
+    <label className="widget-grant">
+      <input type="checkbox" checked={allowResources} disabled={busy || opened}
+        onChange={event => setAllowResources(event.target.checked)} />
+      <span>允许 App 读取此服务器的资源<small>此窗口可请求该服务器提供的任意资源 URI。</small></span>
+    </label>
     <p className="setting-help">仅勾选的工具可由此 App 调用。内容由上述服务器提供。</p>
     <div className="settings-actions">
       <button className="primary-button" disabled={busy || opened} onClick={() => void open()}>

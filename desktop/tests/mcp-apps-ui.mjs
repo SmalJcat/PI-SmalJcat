@@ -37,6 +37,9 @@ export async function mcpAppsChecks(page, profile, artifacts, checks, errors) {
   let frame = child.frameLocator('iframe[title="MCP App"]');
   await frame.locator('#initial').filter({hasText:'"count":7'}).waitFor();
   await frame.locator('#isolation').filter({hasText:'parent-isolated'}).waitFor();
+  assert.equal((await frame.locator('#capabilities').innerText()).includes('serverResources'),false);
+  await frame.getByRole('button',{name:'读取服务器资源',exact:true}).click();
+  await frame.locator('#output').filter({hasText:'未获授权'}).waitFor();
   const frameEscaped = await frame.locator('body').evaluate(async () => {
     if (typeof window.__TAURI_INTERNALS__?.invoke !== 'function') return false;
     // Some WebView2 subframe native calls have no callback route. The public
@@ -57,10 +60,20 @@ export async function mcpAppsChecks(page, profile, artifacts, checks, errors) {
   assert.deepEqual(errors,[],'Native teardown must not create a new frame document');
   await server.getByRole('button',{name:'打开 MCP App',exact:true}).click();
   await grants.getByRole('checkbox',{name:/app_refresh/}).check();
+  const resourceGrant = grants.getByRole('checkbox',{name:'允许 App 读取此服务器的资源',exact:false});
+  assert.equal(await resourceGrant.isChecked(),false);
+  await resourceGrant.check();
+  await page.screenshot({path:path.join(artifacts,'mcp-app-resource-grant.png')});
   opened = await open();
   child = opened.child;
   frame = child.frameLocator('iframe[title="MCP App"]');
   await frame.locator('#initial').filter({hasText:'"count":7'}).waitFor();
+  await frame.locator('#capabilities').filter({hasText:'serverResources'}).waitFor();
+  await frame.getByRole('button',{name:'读取服务器资源',exact:true}).click();
+  await frame.locator('#output').filter({hasText:'你好🙂 MCP resource'}).waitFor();
+  await child.screenshot({path:path.join(artifacts,'mcp-app-resources.png')});
+  await frame.getByRole('button',{name:'读取二进制资源',exact:true}).click();
+  await frame.locator('#output').filter({hasText:'"blob":"AAEC"'}).waitFor();
   await frame.getByRole('button',{name:'刷新服务器数据',exact:true}).click();
   await frame.locator('#output').filter({hasText:'"count":42'}).waitFor();
   await child.screenshot({path:path.join(artifacts,'mcp-app-window.png')});
@@ -79,6 +92,8 @@ export async function mcpAppsChecks(page, profile, artifacts, checks, errors) {
   assert.ok(denialAudit.entries.some(entry=>entry.api.endsWith('::bootstrap') && !entry.ok));
   await child.screenshot({path:path.join(artifacts,'mcp-app-rejections.png')});
   await server.getByRole('button',{name:'断开',exact:true}).click();
+  await frame.getByRole('button',{name:'读取服务器资源',exact:true}).click();
+  await frame.locator('#output').filter({hasText:'断开'}).waitFor();
   await frame.getByRole('button',{name:'刷新服务器数据',exact:true}).click();
   await frame.locator('#output').filter({hasText:'断开'}).waitFor();
   await child.getByRole('button',{name:'关闭 App',exact:true}).click();
@@ -101,4 +116,5 @@ export async function mcpAppsChecks(page, profile, artifacts, checks, errors) {
   checks.push('真实 MCP App 资源、初始化输入/结果、默认拒绝与逐项授权、同服务器工具调用');
   checks.push('App iframe 来源隔离、主窗 IPC 拒绝、未知方法、断线与窗口关闭清理');
   checks.push('旧 widget 演示真实 IPC、已授权调用及越权拒绝兼容');
+  checks.push('App 资源授权默认关闭、协商能力、真实 text/blob 读取及断线拒绝');
 }

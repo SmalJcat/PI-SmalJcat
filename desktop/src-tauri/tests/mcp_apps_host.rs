@@ -103,16 +103,141 @@ async fn message(host: &McpAppHost, label: &str, id: Value, method: &str, params
     )
     .await
 }
+
+#[tokio::test]
+async fn app_resource_reads_require_consent_and_preserve_content_on_the_original_connection() {
+    let root = tempfile::tempdir().unwrap();
+    let mcp = stdio_manager(root.path());
+    let host = McpAppHost::default();
+    for allowed in [false, true] {
+        let prepared = host.prepare(&mcp, "fixture", "app_view").await.unwrap();
+        let id = prepared["id"].as_str().unwrap();
+        let label = host
+            .activate(id, &[], allowed, json!({}), json!({}))
+            .unwrap();
+        let before = message(
+            &host,
+            &label,
+            json!(0),
+            "resources/read",
+            json!({"uri":"fixture://hello"}),
+        )
+        .await;
+        assert!(before["response"]["error"].is_object());
+        let ready = initialize(&host, &label).await;
+        assert_eq!(
+            ready["initializeResult"]["hostCapabilities"]["serverResources"].is_object(),
+            allowed
+        );
+        if !allowed {
+            // This URI exits the fixture if forwarded. A subsequent tool call
+            // proves the denied resource request never reached the server.
+            let denied = message(
+                &host,
+                &label,
+                json!(2),
+                "resources/read",
+                json!({"uri":"fixture://failure"}),
+            )
+            .await;
+            assert_eq!(denied["response"]["error"]["code"], -32000);
+            assert!(denied["response"]["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("授权"));
+            mcp.call("fixture", "app_refresh", json!({})).await.unwrap();
+            host.close(id);
+            continue;
+        }
+        for uri in [
+            json!(""),
+            json!("relative/path"),
+            json!("fixture://hello\n"),
+            json!("x".repeat(4097)),
+            json!(42),
+        ] {
+            let invalid = message(
+                &host,
+                &label,
+                json!(3),
+                "resources/read",
+                json!({"uri":uri}),
+            )
+            .await;
+            assert!(invalid["response"]["error"].is_object(), "{invalid}");
+        }
+        for uri in ["fixture://hello", "fixture://binary"] {
+            let expected = mcp.read_resource("fixture", uri).await.unwrap();
+            let response = message(
+                &host,
+                &label,
+                json!("resource-1"),
+                "resources/read",
+                json!({"uri":uri}),
+            )
+            .await;
+            assert_eq!(response["response"]["id"], "resource-1");
+            assert_eq!(response["response"]["result"], expected["result"]);
+        }
+        for uri in [
+            "fixture://oversized",
+            "fixture://malformed",
+            "fixture://missing",
+        ] {
+            let response = message(
+                &host,
+                &label,
+                json!(4),
+                "resources/read",
+                json!({"uri":uri}),
+            )
+            .await;
+            assert!(response["response"]["error"].is_object(), "{response}");
+            assert!(response["response"]["result"].is_null());
+        }
+        mcp.disconnect("fixture").await;
+        mcp.connect("fixture").await.unwrap();
+        let expired = message(
+            &host,
+            &label,
+            json!(5),
+            "resources/read",
+            json!({"uri":"fixture://hello"}),
+        )
+        .await;
+        assert!(expired["response"]["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("断开"));
+        host.close(id);
+        let closed = message(
+            &host,
+            &label,
+            json!(6),
+            "resources/read",
+            json!({"uri":"fixture://hello"}),
+        )
+        .await;
+        assert!(closed["response"]["error"].is_object());
+    }
+    assert!(host.audit().iter().any(|entry| entry["detail"]
+        .as_str()
+        .is_some_and(|text| text.contains("256 KiB"))));
+    mcp.disconnect("*").await;
+}
 async fn initialize(host: &McpAppHost, label: &str) -> Value {
     let reply = message(host,label,json!(1),"ui/initialize",
         json!({"protocolVersion":"2026-01-26","appInfo":{"name":"test","version":"1"},"appCapabilities":{}})).await;
     assert!(reply["response"]["error"].is_null(), "{reply}");
     assert_eq!(reply["response"]["result"]["protocolVersion"], "2026-01-26");
-    host.message(
-        label,
-        &json!({"jsonrpc":"2.0","method":"ui/notifications/initialized"}).to_string(),
-    )
-    .await
+    let mut ready = host
+        .message(
+            label,
+            &json!({"jsonrpc":"2.0","method":"ui/notifications/initialized"}).to_string(),
+        )
+        .await;
+    ready["initializeResult"] = reply["response"]["result"].clone();
+    ready
 }
 
 #[test]
@@ -186,7 +311,13 @@ async fn stdio_apps_negotiate_bind_resources_authorize_and_reject_old_connection
         .await
         .unwrap();
     let label = host
-        .activate(id, &[], json!({"count":7}), initial["result"].clone())
+        .activate(
+            id,
+            &[],
+            false,
+            json!({"count":7}),
+            initial["result"].clone(),
+        )
         .unwrap();
     assert!(host.document("main", id).is_err());
     assert!(host.document(&label, "other").is_err());
@@ -222,10 +353,10 @@ async fn stdio_apps_negotiate_bind_resources_authorize_and_reject_old_connection
     let prepared = host.prepare(&mcp, "fixture", "app_view").await.unwrap();
     let id = prepared["id"].as_str().unwrap();
     assert!(host
-        .activate(id, &["model_only".into()], json!({}), json!({}))
+        .activate(id, &["model_only".into()], false, json!({}), json!({}))
         .is_err());
     let label = host
-        .activate(id, &["app_refresh".into()], json!({}), json!({}))
+        .activate(id, &["app_refresh".into()], false, json!({}), json!({}))
         .unwrap();
     let before_ready = message(
         &host,
@@ -275,7 +406,13 @@ async fn stdio_apps_negotiate_bind_resources_authorize_and_reject_old_connection
     assert!(host.audit().iter().any(|entry| entry["ok"] == false));
     let large = host.prepare(&mcp, "fixture", "large_schema").await.unwrap();
     let large_label = host
-        .activate(large["id"].as_str().unwrap(), &[], json!({}), json!({}))
+        .activate(
+            large["id"].as_str().unwrap(),
+            &[],
+            false,
+            json!({}),
+            json!({}),
+        )
         .unwrap();
     let reply = message(&host,&large_label,json!(21),"ui/initialize",
         json!({"protocolVersion":"2026-01-26","appInfo":{"name":"test","version":"1"},"appCapabilities":{}})).await;
@@ -347,6 +484,7 @@ async fn http_apps_use_negotiated_connection_and_preserve_rpc_results() {
         .activate(
             prepared["id"].as_str().unwrap(),
             &["app_refresh".into()],
+            false,
             json!({}),
             json!({}),
         )
@@ -387,43 +525,184 @@ async fn http_apps_use_negotiated_connection_and_preserve_rpc_results() {
 
 #[tokio::test]
 async fn app_transport_errors_keep_host_diagnostics_in_host_audit() {
+    for (method, params, grants, resources) in [
+        (
+            "tools/call",
+            json!({"name":"app_failure","arguments":{}}),
+            vec!["app_failure".into()],
+            false,
+        ),
+        (
+            "resources/read",
+            json!({"uri":"fixture://failure"}),
+            vec![],
+            true,
+        ),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let mcp = manager(
+            root.path(),
+            json!({
+                "command":env!("CARGO_BIN_EXE_mcp-fixture"),
+                "args":["--apps","--diagnostic-secret"],
+            }),
+        );
+        let host = McpAppHost::default();
+        let prepared = host.prepare(&mcp, "fixture", "app_view").await.unwrap();
+        let label = host
+            .activate(
+                prepared["id"].as_str().unwrap(),
+                &grants,
+                resources,
+                json!({}),
+                json!({}),
+            )
+            .unwrap();
+        initialize(&host, &label).await;
+        let response = message(&host, &label, json!(13), method, params).await;
+        mcp.disconnect("*").await;
+        assert!(response["response"]["error"].is_object());
+        assert!(
+            !response["response"]["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("HOST_DIAGNOSTIC_SECRET"),
+            "host-only stderr must not be returned to server HTML"
+        );
+        assert!(host.audit().iter().any(|entry| entry["detail"]
+            .as_str()
+            .is_some_and(|detail| detail.contains("HOST_DIAGNOSTIC_SECRET"))));
+    }
+}
+
+#[tokio::test]
+async fn http_app_resources_share_request_limits_and_discard_results_after_close() {
+    use std::{sync::Arc, time::Duration};
     let root = tempfile::tempdir().unwrap();
-    let mcp = manager(
-        root.path(),
-        json!({
-            "command":env!("CARGO_BIN_EXE_mcp-fixture"),
-            "args":["--apps","--diagnostic-secret"],
-        }),
-    );
-    let host = McpAppHost::default();
+    let log = root.path().join("resource-http.jsonl");
+    let (_fixture, url) = HttpFixture::start(&log);
+    let mcp = manager(root.path(), json!({"url":url}));
+    let host = Arc::new(McpAppHost::default());
     let prepared = host.prepare(&mcp, "fixture", "app_view").await.unwrap();
-    let label = host
-        .activate(
-            prepared["id"].as_str().unwrap(),
-            &["app_failure".into()],
-            json!({}),
-            json!({}),
-        )
-        .unwrap();
+    let id = prepared["id"].as_str().unwrap();
+    let label = host.activate(id, &[], false, json!({}), json!({})).unwrap();
     initialize(&host, &label).await;
-    let response = message(
+    let denied = message(
         &host,
         &label,
-        json!(13),
-        "tools/call",
-        json!({"name":"app_failure","arguments":{}}),
+        json!(2),
+        "resources/read",
+        json!({"uri":"fixture://denied"}),
     )
     .await;
-    mcp.disconnect("*").await;
-    assert!(response["response"]["error"].is_object());
-    assert!(
-        !response["response"]["error"]["message"]
+    assert!(denied["response"]["error"].is_object());
+    host.close(id);
+    let prepared = host.prepare(&mcp, "fixture", "app_view").await.unwrap();
+    let id = prepared["id"].as_str().unwrap();
+    let label = host
+        .activate(id, &["app_refresh".into()], true, json!({}), json!({}))
+        .unwrap();
+    let ready = initialize(&host, &label).await;
+    assert!(ready["initializeResult"]["hostCapabilities"]["serverResources"].is_object());
+    for uri in ["fixture://hello", "fixture://binary"] {
+        let expected = mcp.read_resource("fixture", uri).await.unwrap();
+        let response = message(
+            &host,
+            &label,
+            json!(3),
+            "resources/read",
+            json!({"uri":uri}),
+        )
+        .await;
+        assert_eq!(response["response"]["result"], expected["result"]);
+    }
+    let mut pending = Vec::new();
+    for index in 0..16 {
+        if index == 1 {
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while !fs::read_to_string(&log).unwrap().contains("fixture://held") {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .unwrap();
+            let duplicate = message(
+                &host,
+                &label,
+                json!("held-0"),
+                "tools/call",
+                json!({"name":"app_refresh"}),
+            )
+            .await;
+            assert!(duplicate["response"]["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("id 重复"));
+        }
+        let host = host.clone();
+        let label = label.clone();
+        pending.push(tokio::spawn(async move {
+            message(
+                &host,
+                &label,
+                json!(format!("held-{index}")),
+                "resources/read",
+                json!({"uri":"fixture://held"}),
+            )
+            .await
+        }));
+    }
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if fs::read_to_string(&log)
+                .unwrap()
+                .lines()
+                .filter(|line| line.contains("fixture://held"))
+                .count()
+                == 16
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let excess = message(
+        &host,
+        &label,
+        json!("excess"),
+        "resources/read",
+        json!({"uri":"fixture://hello"}),
+    )
+    .await;
+    assert!(excess["response"]["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("请求过多或 id 重复"));
+    host.close(id);
+    mcp.call("fixture", "app_refresh", json!({"releaseResources":true}))
+        .await
+        .unwrap();
+    for request in pending {
+        let response = request.await.unwrap();
+        assert!(response["response"]["error"]["message"]
             .as_str()
             .unwrap()
-            .contains("HOST_DIAGNOSTIC_SECRET"),
-        "host-only stderr must not be returned to server HTML"
-    );
-    assert!(host.audit().iter().any(|entry| entry["detail"]
-        .as_str()
-        .is_some_and(|detail| detail.contains("HOST_DIAGNOSTIC_SECRET"))));
+            .contains("关闭"));
+        assert!(response["response"]["result"].is_null());
+    }
+    mcp.disconnect("*").await;
+    let records = fs::read_to_string(&log)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    assert!(!records
+        .iter()
+        .any(|record| record["message"]["params"]["uri"] == "fixture://denied"));
+    assert!(records
+        .iter()
+        .filter(|record| record["message"]["method"] == "resources/read")
+        .all(|record| record["headers"]["mcp-session-id"] == "fixture-session"));
 }

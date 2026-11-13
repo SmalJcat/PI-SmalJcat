@@ -105,6 +105,7 @@ fn main() {
                     json!({"contents":[{"uri":"fixture://oversized","text":"x".repeat(256 * 1024)}]})
                 }
                 "fixture://malformed" => json!({"contents":"invalid"}),
+                "fixture://failure" if apps => std::process::exit(9),
                 _ => {
                     writeln!(writer, "{}", json!({"jsonrpc":"2.0", "id":id, "error":{"code":-32002,"message":"Resource not found"}})).ok();
                     writer.flush().ok();

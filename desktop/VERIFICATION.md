@@ -1,5 +1,14 @@
 # Pi Desktop 发布验收
 
+## 开发分支 MCP Apps 资源读取（2026-11-13）
+
+- `codex/mcp-app-resources` 为 App 增加标准 resources/read 代理。打开前的资源授权默认关闭，勾选后允许读取原 MCP 连接提供的任意资源 URI，初始化响应据此声明 serverResources。省略 allowResources 的旧调用继续使用默认值。[PR #5](https://github.com/SmalJcat/PI-SmalJcat/pull/5)
+- 复用 MCP 内容请求、配置超时与完整 JSON 256 KiB 上限，保留 text/blob、URI、MIME 与服务端元数据。与工具调用共享 16 项在途上限和请求 ID，传输提交前与结果返回前核对窗口许可，旧连接断开后重新连接也不复用旧授权。底层诊断留在主窗口审计。
+- JavaScript 124 项、生产构建、MCP 内容浏览器 4 类、MCP Apps 浏览器 5 类通过。普通 Rust 175 项、fixture Rust 177 项通过，各有 4 项真实环境检查默认忽略。格式检查与严格全目标 Clippy 通过，本机 HTTP 回环使用进程级 NO_PROXY。
+- App 定向 7 项与 stdio 排队资源许可专项通过，覆盖授权前拒绝且未转发、初始化前拒绝、URI 校验、text/blob 完整结果、超限/格式错误、共享 ID/并发限制、关闭后的迟到结果丢弃、原连接绑定，以及资源传输错误的宿主诊断隐私。独立审阅发现资源方法错误码分类遗漏，修复后补入拒绝错误码断言。
+- 12:43 HKT，真实 Tauri/WebView2 全量 72 项通过，渲染错误 0、模型请求 0。debug 程序 SHA-256 为 `31ce3bdf20a53af8affe3a668ca0bb7c5e97c3cc73a90e9e6392a4224349d133`。首次全量在既有 ACP 权限切换的焦点恢复断言超时，界面已显示请求批准；保留失败回执与截图后，同一程序完整重跑通过。
+- 证据为 `artifacts/app-resources-{build,js,browser,host,queued}.log`、`app-resources-full-*.log`、`app-resources-host-final.log`、`app-resources-clippy-final.log`、`app-resources-full-ui-result.json`，首次失败为 `app-resources-ui-first-failure.json`/`.png`。已查看 App 资源成功截图 `mcp-app-resources.png`。测试采用隔离本地 stdio/HTTP 服务，远端第三方 App、TLS/OAuth 与聊天协作另行验证和扩展。
+
 ## 0.7.1 服务器 MCP Apps 宿主交付（2026-11-13）
 
 - 分支 codex/mcp-apps-host 按稳定版 2026-01-26 MCP Apps 接入，先发布 IPC 契约，再实现资源宿主、窗口与实际工具代理。[PR #4](https://github.com/SmalJcat/PI-SmalJcat/pull/4)

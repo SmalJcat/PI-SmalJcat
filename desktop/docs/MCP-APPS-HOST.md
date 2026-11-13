@@ -5,7 +5,7 @@
 ## 主窗口接口
 
 - `mcp-app-prepare {name,tool}` 返回 `{id,server,tool,uri,title,sha256,tools,domains}`。预备会话绑定实际 MCP 连接及资源内容，`tools` 为该服务器允许 App 调用的工具清单。
-- `mcp-app-open {id,grantedTools,arguments,result}` 返回 `{id,label}`。工具授权默认空，用户逐项选择；初始输入和结果来自主窗口中刚完成的工具调用。
+- `mcp-app-open {id,grantedTools,allowResources?,arguments,result}` 返回 `{id,label}`。工具授权默认空，资源读取默认关闭，用户选择后打开窗口；初始输入和结果来自主窗口中刚完成的工具调用。
 - `mcp-app-close {id}` 关闭预备或已打开的 App，会话授权随之释放。
 - `widget-audit` 同时返回旧演示与真实 App 的调用审计。
 
@@ -21,7 +21,7 @@
 
 新增受窗口标签约束的 `widget_command {operation,payload}`，只允许 `identity`、`invoke`、`app-bootstrap`、`app-rpc`、`app-close`。最后一项仅关闭调用方自己的 App 窗口。身份从实际窗口反查，主窗口通用命令仍执行原有 main-only 校验。
 
-`app-bootstrap` 返回展示来源与本窗口专属资源 URL。`app-rpc {message}` 接收标准 JSON-RPC 文本，返回 `{response,notifications}`。支持 `ui/initialize`、`ui/notifications/initialized`、`ping`、授权后的同连接 `tools/call`、日志和固定窗口显示模式。未实现的方法返回协议错误。
+`app-bootstrap` 返回展示来源与本窗口专属资源 URL。`app-rpc {message}` 接收标准 JSON-RPC 文本，返回 `{response,notifications}`。支持 `ui/initialize`、`ui/notifications/initialized`、`ping`、授权后的同连接 `tools/call` 与 `resources/read`、日志和固定窗口显示模式。未实现的方法返回协议错误。
 
 App 完成初始化通知后，宿主依序发送 `ui/notifications/tool-input` 与 `ui/notifications/tool-result`。调用同时受用户工具授权和服务器 `_meta.ui.visibility` 约束。断开连接后旧窗口的调用失败，重新连接需重新打开 App。
 
@@ -41,11 +41,12 @@ stdio 的请求期限同时覆盖写入与响应。写入超时关闭可能只�
 
 ## 当前能力边界
 
-入口位于桌面 MCP 调试区，调用带“App 界面”的工具后打开资源授权面板。App 当前可用初始化、ping、日志、固定窗口模式及授权后的 tools/call。资源读取代理、聊天消息/上下文更新、外部链接和相机等浏览器权限尚未公开。服务端 HTML 在用户选择打开后加载，按声明的 CSP 来源请求网络。
+入口位于桌面 MCP 调试区，调用带“App 界面”的工具后打开资源授权面板。App 当前可用初始化、ping、日志、固定窗口模式，以及授权后的 tools/call 与 resources/read。资源授权覆盖该连接提供的任意 URI，内容通过协议返回 App，单次 JSON 上限 256 KiB。聊天消息/上下文更新、外部链接和相机等浏览器权限尚未公开。服务端 HTML 在用户选择打开后加载，按声明的 CSP 来源请求网络。
 
 ## 验收
 
 - stdio 与 HTTP 夹具返回真实工具元数据和 HTML 资源，验证协商、资源类型/内容/CSP、授权、可见性、断线、窗口关闭及初始化顺序。
 - 浏览器验证 postMessage 来源检查、默认拒绝、真实工具结果及旧演示兼容。
+- 资源代理验证授权能力声明、原样 text/blob、stdio 写入排队时撤销许可、共享并发上限/ID、关闭后的迟到结果丢弃、重连后旧窗口失效，以及诊断隐私和超限拒绝。
 - 真实 WebView2 通过服务器资源打开独立窗口，在 iframe 内完成初始化、接收工具结果、调用已授权工具并清理窗口。
 - `npm run test:release -- -AppsOnly` 对暂存的正式程序运行同一 App 全链路检查，使用真实 Pi、临时配置和本地 MCP 服务。正式程序保持单实例，验收前需退出已有 Pi Desktop。

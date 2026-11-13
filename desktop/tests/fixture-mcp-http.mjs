@@ -6,6 +6,7 @@ const mode = process.argv[3] || 'normal';
 const record = value => appendFileSync(log, JSON.stringify(value) + '\n');
 let revision = 0;
 const streams = new Set();
+const heldResourceReplies = [];
 const json = (res, status, value, headers = {}) => {
   const body = JSON.stringify(value);
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': Buffer.byteLength(body), ...headers });
@@ -51,10 +52,26 @@ const server = http.createServer(async (req, res) => {
       {name:'app_refresh',inputSchema:{type:'object'},_meta:{ui:{visibility:['app']}}},
       {name:'model_only',inputSchema:{type:'object'},_meta:{ui:{visibility:['model']}}},
     ]});
-    else if (message.method === 'resources/read') reply({contents:[{uri:message.params.uri,
-      mimeType:'text/html;profile=mcp-app',text:readFileSync(new URL('./fixtures/mcp-app.html',import.meta.url),'utf8')}]});
-    else if (message.method === 'tools/call') reply({content:[{type:'text',text:'HTTP App result'}],
-      structuredContent:{count:message.params.arguments.count || 1}});
+    else if (message.method === 'resources/read') {
+      const uri = message.params.uri;
+      if (uri === 'ui://fixture/app') reply({contents:[{uri,
+        mimeType:'text/html;profile=mcp-app',text:readFileSync(new URL('./fixtures/mcp-app.html',import.meta.url),'utf8')}]});
+      else if (uri === 'fixture://hello') {
+        reply({contents:[{uri,text:'你好🙂 HTTP App resource',mimeType:'text/plain'}],_meta:{source:'http-app-resource'}});
+      }
+      else if (uri === 'fixture://binary') reply({contents:[{uri,blob:'AAEC',mimeType:'application/octet-stream'}]});
+      else if (uri === 'fixture://held') heldResourceReplies.push(() => reply({contents:[{uri,text:'late resource result'}]}));
+      else if (uri === 'fixture://oversized') reply({contents:[{uri,text:'x'.repeat(256*1024)}]});
+      else if (uri === 'fixture://malformed') reply({contents:'invalid'});
+      else json(res,200,{jsonrpc:'2.0',id:message.id,error:{code:-32002,message:'Resource not found'}});
+    }
+    else if (message.method === 'tools/call') {
+      if (message.params.arguments.releaseResources) {
+        for (const respond of heldResourceReplies.splice(0)) respond();
+      }
+      reply({content:[{type:'text',text:'HTTP App result'}],
+        structuredContent:{count:message.params.arguments.count || 1}});
+    }
     else json(res,200,{jsonrpc:'2.0',id:message.id,error:{code:-32601,message:'Method unavailable'}});
     return;
   }
