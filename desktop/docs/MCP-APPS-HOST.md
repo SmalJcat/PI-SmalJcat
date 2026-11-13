@@ -11,7 +11,7 @@
 
 ## 资源代理增量契约
 
-本节为 `codex/mcp-app-resources` 的开发契约。`mcp-app-open` 新增可选布尔字段 `allowResources`，省略时为 `false`，返回结构继续为 `{id,label}`。授权面板提供“允许 App 读取此服务器的资源”复选框，默认关闭。此授权覆盖原 MCP 连接提供的资源 URI，关闭窗口后释放。
+`mcp-app-open` 接受可选布尔字段 `allowResources`，省略时为 `false`，返回结构为 `{id,label}`。授权面板提供“允许 App 读取此服务器的资源”复选框，默认关闭。此授权覆盖原 MCP 连接提供的资源 URI，关闭窗口后释放。
 
 授权后，`ui/initialize` 的响应声明 `hostCapabilities.serverResources = {}`，App 可发送标准 `resources/read {uri}` 请求。响应原样返回 MCP `ReadResourceResult`，包含完整的 text/blob、URI、MIME 与服务端元数据。单次 JSON 结果上限为 256 KiB，超过时返回错误。
 
