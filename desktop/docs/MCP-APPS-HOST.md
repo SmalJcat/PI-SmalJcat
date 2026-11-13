@@ -29,7 +29,18 @@
 
 Core 新增绑定对象的创建与发送方法，在现有操作锁内核对会话代次、编辑代次及会话 ID，复用普通 prompt 的会话保护和工具权限。正式包 App 专项使用隔离 Pi 配置及本机 OpenAI 兼容服务完成回复，回执记录本机提供方请求数和选用的提供方。未观测的外部请求数以 null 表示。
 
+## 模型上下文增量契约
+
+`codex/mcp-app-model-context` 为 `mcp-app-open` 增加可选布尔字段 `allowModelContext`，默认 false，返回结构为 `{id,label}`。授权面板显示“允许 App 为此 Pi 对话提供模型上下文”，说明内容用于后续模型请求、可能增加用量。该授权独立于消息发送授权，绑定打开时的 Pi 连接、会话和编辑代次。
+
+获准后声明 `hostCapabilities.updateModelContext = {text:{},structuredContent:{}}`，接受 `ui/update-model-context {content?:TextContent[],structuredContent?:object}`，成功返回 `{}`。同一 App 的有效更新依次覆盖，空对象清除该 App 的上下文。请求沿用 64 KiB 消息上限及在途/ID 限制，更新本身只校验会话和保存内存状态。
+
+后续普通用户发送和 App 消息都会在 Pi 的 context 事件中读取此会话全部有效 App 的最新快照，以带来源标记的临时消息加入模型输入。上下文不会作为额外消息写入会话历史。窗口关闭、原 MCP 连接断开、Pi 切换/重连或桌面历史编辑后，后续快照排除旧上下文。已选入在途模型请求的快照可继续使用。
+
+复用已有带令牌的扩展通道，Pi 发出 `extension_ui_request {method:"input",title:"PI_DESKTOP_APP_CONTEXT",placeholder:JSON.stringify({token,sessionId})}`，原生宿主返回 `{contexts:[{id,source,content?,structuredContent?,timestamp}]}`。通道按活动 Pi 连接代次、令牌、会话和 App 授权核验，内部查询在宿主处理。
+
 ## 子窗口接口
+
 
 新增受窗口标签约束的 `widget_command {operation,payload}`，只允许 `identity`、`invoke`、`app-bootstrap`、`app-rpc`、`app-close`。最后一项仅关闭调用方自己的 App 窗口。身份从实际窗口反查，主窗口通用命令仍执行原有 main-only 校验。
 
