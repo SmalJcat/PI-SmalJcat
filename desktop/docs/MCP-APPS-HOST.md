@@ -15,7 +15,7 @@
 
 授权后，`ui/initialize` 的响应声明 `hostCapabilities.serverResources`，App 可发送 `resources/read {uri}` 请求。支持目录通知的服务器会声明 listChanged，资源订阅通过下述可选扩展协商。读取响应原样返回 MCP `ReadResourceResult`，包含完整的 text/blob、URI、MIME 与服务端元数据。单次 JSON 结果上限为 256 KiB，超过时返回错误。
 
-请求要求已完成初始化、资源授权有效且原连接存活，URI 必须为长度不超过 4096 字节的非空绝对 URI。请求与工具调用共享 16 项在途上限及 ID 去重。传输提交前与结果返回前核对窗口许可，服务器断开重连后旧窗口失效，底层诊断链写入主窗口宿主审计。资源目录变更通知、订阅和模型上下文更新另行扩展。
+请求要求已完成初始化、资源授权有效且原连接存活，URI 必须为长度不超过 4096 字节的非空绝对 URI。请求与工具调用共享 16 项在途上限及 ID 去重。传输提交前与结果返回前核对窗口许可，服务器断开重连后旧窗口失效，底层诊断链写入主窗口宿主审计。目录通知、可选订阅及模型上下文见后续接口说明。
 
 ## 对话消息增量契约
 
@@ -41,7 +41,7 @@ Core 新增绑定对象的创建与发送方法，在现有操作锁内核对会
 
 ## 资源订阅增量契约
 
-`codex/mcp-app-resource-subscriptions` 按当前 MCP 2025-06-18 会话语义增加资源订阅。App 侧通过 `hostCapabilities.experimental["pi-desktop/resource-subscriptions"] = {maxSubscriptions:64}` 声明可选能力；资源目录通知通过标准 serverResources.listChanged 声明。此接入属于 Pi Desktop 可选扩展。[MCP 资源协议](https://modelcontextprotocol.io/specification/2025-06-18/server/resources) [Apps 订阅提案](https://github.com/modelcontextprotocol/ext-apps/issues/659)
+资源订阅按当前 MCP 2025-06-18 会话语义实现。App 侧通过 `hostCapabilities.experimental["pi-desktop/resource-subscriptions"] = {maxSubscriptions:64}` 声明可选能力；资源目录通知通过标准 serverResources.listChanged 声明。此接入属于 Pi Desktop 可选扩展。[MCP 资源协议](https://modelcontextprotocol.io/specification/2025-06-18/server/resources) [Apps 订阅提案](https://github.com/modelcontextprotocol/ext-apps/issues/659)
 
 复用默认关闭的 allowResources。获准后，可向原 MCP 连接发送 `resources/subscribe {uri}` 和 `resources/unsubscribe {uri}`，成功返回 `{}`，服务端须声明 resources.subscribe。URI 沿用 4096 字节绝对 URI 校验，每 App 最多 64 个，每连接最多 256 个。相同连接、相同 URI 由多个 App 共享，首个订阅与最后一个取消触发服务端请求。
 

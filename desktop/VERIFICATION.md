@@ -1,6 +1,6 @@
 # Pi Desktop 发布验收
 
-## 开发分支 MCP Apps 资源订阅（2026-11-13）
+## 0.7.1 MCP Apps 资源订阅交付（2026-11-13）
 
 - `codex/mcp-app-resource-subscriptions` 按当前 MCP 2025-06-18 增加 App 资源订阅可选扩展，使用 experimental["pi-desktop/resource-subscriptions"] 协商，复用默认关闭的资源授权。标准 Apps 订阅接入仍处于提案阶段，后续协议兼容验证另行开展。[PR #8](https://github.com/SmalJcat/PI-SmalJcat/pull/8)
 - 同连接同 URI 由多个 App 共享，首个订阅和最后一个取消触发上游请求。支持每 App 64、每连接 256 限额、URI/权限校验、失败变更重新确认与受保护审计。关闭立即撤销投递并唤醒等待，等待在途变更完成后清理，各轮清理网络等待预算 3 秒。
@@ -8,6 +8,9 @@
 - JavaScript 128、常规 Rust 182、fixture Rust 186 项通过，各 Rust 模式 4 项真实环境检查默认忽略。生产构建、格式与严格全目标 Clippy 通过，App 浏览器 8 类通过。定向 Rust 11 项覆盖共享计数、未授权/无能力、64/256 限制、溢出、GET Last-Event-ID、清理失败修复、错误隐私及关闭期间的迟到订阅确认。
 - 17:37 HKT，真实 Tauri/WebView2 全量 75 项通过，渲染错误 0、fixture 模型请求 0。debug SHA-256 为 `a8b2e7a6d531621ece952a31eacb237971b9c2e5d123e04b6dcfaae84376fc90`。真实 Pi + 本机模拟提供方的 App 专项 10 项通过，实际本机模型请求 3 次，覆盖实际通知驱动 resources/read、取消后停止投递与重新订阅。独立复核后补齐通知等待重试及终止状态，浏览器失败一次后恢复的断言通过。
 - 证据为 `artifacts/app-subscriptions-{host-reviewed,js,browser-reviewed,full-rust-final,full-rust-fixture-final,full-fmt-final,full-clippy-final}.log`、`app-subscriptions-real-pi-result.json`、`app-subscriptions-full-ui-result.json`，截图为 `mcp-app-subscription-update.png`。MCP 使用隔离 stdio/回环 HTTP，外部请求数未经独立观测，回执为 null。
+- 17:40 HKT，从干净提交 `84cf62d37dd0491eadc146b87c4d5e75e5541941` 生成正式程序，版本 0.7.1，18,402,304 字节，SHA-256 为 `6402ae469cf7f07200b16638d2a6748122070bf8fb0f85eb1dbb5c27c3565e2c`。149 个文件的源码指纹为 `5ce5dd70875b1b7f53fce49e269a5c9b03971d10e24f77a33b45f443b9deb4c7`。
+- 同一正式包完成 Pi/官方 ACP 元数据 6 项及 App 专项 10 项，渲染错误 0。App 专项以真实 Pi 和本机模拟提供方验证 3 次实际本机模型请求，并覆盖服务端资源通知驱动读取、取消/重新订阅及原有消息/模型上下文。
+- 17:41 HKT，经既有部署工具更新 `%LOCALAPPDATA%\Programs\Pi Desktop\fdea6c4`，旧版保留为 `fdea6c4.backup-2026-11-13T09-41-43-610Z-eb6cba5c`。安装/暂存程序的清单、大小、哈希和源码指纹一致。证据为 `app-subscriptions-package-result.json`、`app-subscriptions-release-acp-result.json`、`app-subscriptions-release-apps-result.json`、`app-subscriptions-deploy.log`、`app-subscriptions-release-integrity.json`，后续交付文档属于源码指纹排除范围。
 
 ## 0.7.1 MCP Apps 模型上下文交付（2026-11-13）
 
