@@ -1,6 +1,6 @@
 # MCP resources/prompts 接口契约
 
-本轮在独立分支 `feature/mcp-resources-prompts` 实现，当前仍为 0.7.1 开发增量，尚未打包部署。
+本轮在独立分支 `feature/mcp-resources-prompts` 实现，已包含在 2026-11-12 从 `e29c52f` 构建、验收并部署的 0.7.1 中。[正式交付记录](../VERIFICATION.md)
 
 ## 请求与响应
 
@@ -26,7 +26,7 @@
 - Windows CI 增加确定性 Chromium 侧栏/MCP 回归、fixture Rust 测试与 loopback NO_PROXY。
 - stdio 与 HTTP 协议测试覆盖无 tools 服务器、分页、模板、文本/blob、prompt 参数、错误与超限。
 - 浏览器交互回归验证实际面板操作、分页、参数校验、失败反馈、能力切换及旧响应隔离。
-- 本机 TypeScript/Vite、JS 120 项、Rust 167/169 项、fmt/Clippy、原生 WebView2 67 项通过；详见 [验收记录](../VERIFICATION.md)。远端 Actions 与真实远程服务尚未运行。
+- 包含后续编辑重发与 Fast 的最终构建通过本机 TypeScript/Vite、JS 124 项、Rust 167/169 项、fmt/Clippy、原生 WebView2 68 项及正式包 6 项验收。对应远端 Actions 已通过，真实远程 MCP 服务兼容性仍待验证。[验收记录](../VERIFICATION.md)
 
 ```powershell
 npm run build
