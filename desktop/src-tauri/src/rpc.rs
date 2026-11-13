@@ -390,6 +390,16 @@ impl Rpc {
         data: Value,
         duration: Duration,
     ) -> Result<Value> {
+        self.request_guarded(kind, data, duration, None).await
+    }
+
+    pub(crate) async fn request_guarded(
+        self: &Arc<Self>,
+        kind: &str,
+        data: Value,
+        duration: Duration,
+        permit: Option<&AtomicBool>,
+    ) -> Result<Value> {
         if self.closed.load(Ordering::SeqCst) {
             bail!("Pi 未连接，请重新连接。");
         }
@@ -404,7 +414,17 @@ impl Rpc {
             id,
         };
         timeout(duration, async {
-            self.write(Value::Object(record)).await?;
+            match permit {
+                Some(permit) => {
+                    if !self
+                        .write_guarded(Value::Object(record), || permit.load(Ordering::SeqCst))
+                        .await?
+                    {
+                        bail!("App 已关闭，消息未提交");
+                    }
+                }
+                None => self.write(Value::Object(record)).await?,
+            }
             receiver
                 .await
                 .context("Pi 请求已取消")?
@@ -480,6 +500,57 @@ mod tests {
         assert!(checked.load(Ordering::SeqCst));
         rpc.stop().await;
     }
+    #[tokio::test]
+    async fn app_prompt_permission_is_rechecked_after_waiting_for_the_writer() {
+        let root = tempfile::tempdir().unwrap();
+        let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/fixture-pi.mjs");
+        let rpc = Rpc::spawn(
+            Path::new("node"),
+            root.path(),
+            &[script.to_string_lossy().into_owned()],
+            &["--no-session".into()],
+            Arc::new(|_| {}),
+            &[(
+                "PI_CODING_AGENT_DIR".into(),
+                root.path().join("agent").to_string_lossy().into_owned(),
+            )],
+        )
+        .await
+        .unwrap();
+        let held = rpc.stdin.lock().await;
+        let allowed = Arc::new(AtomicBool::new(true));
+        let permit = allowed.clone();
+        let writer = rpc.clone();
+        let pending = tokio::spawn(async move {
+            writer
+                .request_guarded(
+                    "prompt",
+                    json!({"message":"MUST_NOT_WRITE"}),
+                    Duration::from_secs(5),
+                    Some(&permit),
+                )
+                .await
+        });
+        timeout(Duration::from_secs(2), async {
+            while rpc.pending.lock().unwrap().is_empty() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        allowed.store(false, Ordering::SeqCst);
+        drop(held);
+        assert!(pending.await.unwrap().is_err());
+        assert!(rpc.pending.lock().unwrap().is_empty());
+        assert!(
+            rpc.call("get_messages", json!({})).await.unwrap()["messages"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        rpc.stop().await;
+    }
+
     #[test]
     fn jsonl_split_utf8_and_unicode_separators() {
         let expected = json!({"text":"你好🙂\u{2028}line\u{2029}end"});

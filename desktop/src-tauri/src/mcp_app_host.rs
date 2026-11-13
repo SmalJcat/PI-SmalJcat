@@ -1,5 +1,6 @@
 //! Server-provided MCP Apps, bound to a connection, resource and native window.
 use crate::{
+    core::AppChatBinding,
     mcp_apps::AuditEntry,
     mcp_client::{McpManager, McpSession},
 };
@@ -155,6 +156,7 @@ struct AppState {
     ready: bool,
     grants: HashSet<String>,
     allow_resources: bool,
+    chat: Option<AppChatBinding>,
     pending: HashSet<String>,
     arguments: Value,
     result: Value,
@@ -278,6 +280,7 @@ impl McpAppHost {
         id: &str,
         grants: &[String],
         allow_resources: bool,
+        chat: Option<AppChatBinding>,
         arguments: Value,
         result: Value,
     ) -> Result<String> {
@@ -307,6 +310,7 @@ impl McpAppHost {
         }
         state.grants = grants.iter().cloned().collect();
         state.allow_resources = allow_resources;
+        state.chat = chat;
         state.arguments = arguments;
         state.result = result;
         app.active.store(true, Ordering::SeqCst);
@@ -447,6 +451,7 @@ impl McpAppHost {
                         | "ui/notifications/initialized"
                         | "tools/call"
                         | "resources/read"
+                        | "ui/message"
                         | "ping"
                         | "notifications/message"
                         | "ui/notifications/size-changed"
@@ -496,6 +501,9 @@ impl McpAppHost {
                 if state.allow_resources {
                     capabilities["serverResources"] = json!({});
                 }
+                if state.chat.is_some() {
+                    capabilities["message"] = json!({"text":{}});
+                }
                 Ok((
                     json!({
                         "protocolVersion":UI_VERSION,
@@ -531,6 +539,49 @@ impl McpAppHost {
                 Ok((json!({}), vec![]))
             }
             "ui/request-display-mode" if !notification => Ok((json!({"mode":"inline"}), vec![])),
+            "ui/message" if !notification => {
+                let chat = app
+                    .state
+                    .lock()
+                    .unwrap()
+                    .chat
+                    .clone()
+                    .context("App 未获授权向 Pi 对话发送消息")?;
+                if params["role"] != "user" {
+                    bail!("App 消息角色必须为 user");
+                }
+                let blocks = match &params["content"] {
+                    Value::Array(blocks) => blocks.as_slice(),
+                    block @ Value::Object(_) => std::slice::from_ref(block),
+                    _ => bail!("App 消息必须包含 text 内容块"),
+                };
+                let parts = blocks
+                    .iter()
+                    .map(|block| {
+                        if block["type"] != "text" {
+                            bail!("App 消息只支持文本");
+                        }
+                        block["text"].as_str().context("App 文本内容无效")
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let text = parts.join("\n");
+                if text.trim().is_empty() {
+                    bail!("App 消息不能为空");
+                }
+                let _request = RequestGuard::begin(&app, &message["id"])?;
+                let text = format!(
+                    "[MCP App {} · {}]\n\n{text}",
+                    json!(app.connection.name),
+                    json!(app.tool["name"])
+                );
+                chat.send(text, &app.active)
+                    .await
+                    .context("App 消息发送失败，请查看宿主审计")?;
+                if !app.active.load(Ordering::SeqCst) {
+                    bail!("App 已关闭");
+                }
+                Ok((json!({}), vec![]))
+            }
             "resources/read" if !notification => {
                 if !app.state.lock().unwrap().allow_resources {
                     bail!("App 未获授权读取服务器资源");

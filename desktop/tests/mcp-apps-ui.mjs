@@ -3,7 +3,12 @@ import path from 'node:path';
 import { chromium } from 'playwright';
 import { webviewDebugEndpoint } from './tauri-harness.mjs';
 
-export async function mcpAppsChecks(page, profile, artifacts, checks, errors) {
+export async function mcpAppsChecks(page, profile, artifacts, checks, errors, {replyText='已完成检查。'}={}) {
+  const composer = page.locator('main.main-area:not(.backend-hidden) textarea[aria-label="消息"]');
+  const originalDraft = await composer.inputValue();
+  const draft = '用户保留的 Pi 草稿🙂';
+  await composer.fill(draft);
+  const originalMessages = (await page.evaluate(()=>window.pi.snapshot())).messages;
   await page.getByRole('button',{name:'MCP 连接',exact:true}).click();
   const dialog = page.getByRole('dialog',{name:'MCP 连接',exact:true});
   await dialog.getByRole('tab',{name:'桌面调试',exact:true}).click();
@@ -40,6 +45,10 @@ export async function mcpAppsChecks(page, profile, artifacts, checks, errors) {
   assert.equal((await frame.locator('#capabilities').innerText()).includes('serverResources'),false);
   await frame.getByRole('button',{name:'读取服务器资源',exact:true}).click();
   await frame.locator('#output').filter({hasText:'未获授权'}).waitFor();
+  assert.equal((await frame.locator('#capabilities').innerText()).includes('"message":'),false);
+  await frame.getByRole('button',{name:'发送到 Pi 对话',exact:true}).click();
+  await frame.locator('#output').filter({hasText:'未获授权'}).waitFor();
+  assert.deepEqual((await page.evaluate(()=>window.pi.snapshot())).messages,originalMessages);
   const frameEscaped = await frame.locator('body').evaluate(async () => {
     if (typeof window.__TAURI_INTERNALS__?.invoke !== 'function') return false;
     // Some WebView2 subframe native calls have no callback route. The public
@@ -63,12 +72,40 @@ export async function mcpAppsChecks(page, profile, artifacts, checks, errors) {
   const resourceGrant = grants.getByRole('checkbox',{name:'允许 App 读取此服务器的资源',exact:false});
   assert.equal(await resourceGrant.isChecked(),false);
   await resourceGrant.check();
+  const messageGrant = grants.getByRole('checkbox',{name:'允许 App 向此 Pi 对话发送消息',exact:false});
+  assert.equal(await messageGrant.isChecked(),false);
+  await messageGrant.check();
+  await page.screenshot({path:path.join(artifacts,'mcp-app-chat-grant.png')});
   await page.screenshot({path:path.join(artifacts,'mcp-app-resource-grant.png')});
   opened = await open();
   child = opened.child;
   frame = child.frameLocator('iframe[title="MCP App"]');
   await frame.locator('#initial').filter({hasText:'"count":7'}).waitFor();
   await frame.locator('#capabilities').filter({hasText:'serverResources'}).waitFor();
+  assert.deepEqual(JSON.parse(await frame.locator('#capabilities').innerText()).message,{text:{}});
+  await frame.getByRole('button',{name:'发送到 Pi 对话',exact:true}).click();
+  let chatSnapshot;
+  const replyDeadline = Date.now()+15000;
+  while (Date.now()<replyDeadline) {
+    const snapshot = await page.evaluate(()=>window.pi.snapshot());
+    const sentIndex = snapshot.messages.findIndex(message=>message.role==='user'
+      && JSON.stringify(message.content).includes('MCP_APP_CHAT_TEST'));
+    if (!snapshot.state.isStreaming && sentIndex>=0 && snapshot.messages.slice(sentIndex+1).some(message=>
+      message.role==='assistant' && JSON.stringify(message.content).includes(replyText))) {
+      chatSnapshot = snapshot;
+      break;
+    }
+    await page.waitForTimeout(100);
+  }
+  assert.ok(chatSnapshot,'The App message must produce the expected Pi response');
+  await frame.locator('#output').filter({hasText:/^\{\}$/}).waitFor();
+  const chatMessages = chatSnapshot.messages;
+  const sent = chatMessages.filter(message=>message.role==='user' && JSON.stringify(message.content).includes('MCP_APP_CHAT_TEST'));
+  assert.equal(sent.length,1);
+  assert.match(JSON.stringify(sent[0].content),/MCP App.*app-server.*app_view/);
+  assert.ok(chatMessages.some(message=>message.role==='assistant' && JSON.stringify(message.content).includes(replyText)));
+  assert.equal(await composer.inputValue(),draft);
+  await child.screenshot({path:path.join(artifacts,'mcp-app-chat-result.png')});
   await frame.getByRole('button',{name:'读取服务器资源',exact:true}).click();
   await frame.locator('#output').filter({hasText:'你好🙂 MCP resource'}).waitFor();
   await child.screenshot({path:path.join(artifacts,'mcp-app-resources.png')});
@@ -92,6 +129,8 @@ export async function mcpAppsChecks(page, profile, artifacts, checks, errors) {
   assert.ok(denialAudit.entries.some(entry=>entry.api.endsWith('::bootstrap') && !entry.ok));
   await child.screenshot({path:path.join(artifacts,'mcp-app-rejections.png')});
   await server.getByRole('button',{name:'断开',exact:true}).click();
+  await frame.getByRole('button',{name:'发送到 Pi 对话',exact:true}).click();
+  await frame.locator('#output').filter({hasText:'断开'}).waitFor();
   await frame.getByRole('button',{name:'读取服务器资源',exact:true}).click();
   await frame.locator('#output').filter({hasText:'断开'}).waitFor();
   await frame.getByRole('button',{name:'刷新服务器数据',exact:true}).click();
@@ -113,8 +152,12 @@ export async function mcpAppsChecks(page, profile, artifacts, checks, errors) {
   await page.evaluate(()=>window.pi.widgetClose('fixture.weather'));
   await demo.browser.close();
   await dialog.getByRole('button',{name:'关闭弹窗',exact:true}).click();
+  assert.equal(await composer.inputValue(),draft);
+  await page.screenshot({path:path.join(artifacts,'mcp-app-chat-transcript.png')});
+  await composer.fill(originalDraft);
   checks.push('真实 MCP App 资源、初始化输入/结果、默认拒绝与逐项授权、同服务器工具调用');
   checks.push('App iframe 来源隔离、主窗 IPC 拒绝、未知方法、断线与窗口关闭清理');
   checks.push('旧 widget 演示真实 IPC、已授权调用及越权拒绝兼容');
   checks.push('App 资源授权默认关闭、协商能力、真实 text/blob 读取及断线拒绝');
+  checks.push('App 对话消息默认拒绝、文本能力协商、Pi 来源标记/回复、草稿保留及断线拒绝');
 }

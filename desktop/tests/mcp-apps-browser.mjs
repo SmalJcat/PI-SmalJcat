@@ -59,6 +59,15 @@ try {
     contents:[{uri:'fixture://binary',mimeType:'application/octet-stream',blob:'AAEC'}],
   });
   checks.push('资源请求、默认拒绝与完整 text/blob 结果转发');
+  await frame.locator('#send-message').click();
+  await frame.locator('#output').filter({hasText:'denied'}).waitFor();
+  await page.evaluate(()=>{window.appHost.allowMessages=true;});
+  await frame.locator('#send-message').click();
+  await frame.locator('#output').filter({hasText:'{}'}).waitFor();
+  assert.deepEqual(await page.evaluate(()=>window.appHost.calls.at(-1).params),{
+    role:'user',content:[{type:'text',text:'MCP_APP_CHAT_TEST'}],
+  });
+  checks.push('对话消息请求、授权拒绝与成功回执转发');
   await page.evaluate(()=>{window.appHost.hold=true;});
   await frame.locator('#refresh').click();
   await page.waitForFunction(()=>typeof window.appHost.release==='function');

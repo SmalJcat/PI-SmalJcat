@@ -113,7 +113,7 @@ async fn app_resource_reads_require_consent_and_preserve_content_on_the_original
         let prepared = host.prepare(&mcp, "fixture", "app_view").await.unwrap();
         let id = prepared["id"].as_str().unwrap();
         let label = host
-            .activate(id, &[], allowed, json!({}), json!({}))
+            .activate(id, &[], allowed, None, json!({}), json!({}))
             .unwrap();
         let before = message(
             &host,
@@ -240,6 +240,217 @@ async fn initialize(host: &McpAppHost, label: &str) -> Value {
     ready
 }
 
+#[cfg(feature = "test-fixture")]
+#[tokio::test]
+async fn app_chat_messages_bind_to_pi_and_reject_stale_busy_or_revoked_sends() {
+    use pi_desktop::core::{ConnectOptions, Core};
+    use std::{sync::atomic::AtomicBool, time::Duration};
+
+    let root = tempfile::tempdir().unwrap();
+    let work = root.path().join("work");
+    fs::create_dir(&work).unwrap();
+    std::env::set_var("PI_DESKTOP_TEST", "1");
+    std::env::set_var("PI_DESKTOP_EXECUTABLE", "node");
+    std::env::set_var(
+        "PI_DESKTOP_RPC_SCRIPT",
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tests/fixture-pi.mjs"),
+    );
+    std::env::set_var("PI_CODING_AGENT_DIR", root.path().join("agent"));
+    std::env::set_var("PI_CODING_AGENT_SESSION_DIR", root.path().join("sessions"));
+    let core = Core::new(&root.path().join("profile")).unwrap();
+    core.connect(ConnectOptions {
+        cwd: Some(work.to_string_lossy().into_owned()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let mcp = stdio_manager(root.path());
+    let host = McpAppHost::default();
+    let prepared = host.prepare(&mcp, "fixture", "app_view").await.unwrap();
+    let id = prepared["id"].as_str().unwrap();
+    let label = host
+        .activate(id, &[], false, None, json!({}), json!({}))
+        .unwrap();
+    let ready = initialize(&host, &label).await;
+    assert!(ready["initializeResult"]["hostCapabilities"]["message"].is_null());
+    let denied = message(
+        &host,
+        &label,
+        json!(2),
+        "ui/message",
+        json!({"role":"user","content":[{"type":"text","text":"denied"}]}),
+    )
+    .await;
+    assert_eq!(denied["response"]["error"]["code"], -32000);
+    assert!(core.snapshot().await.unwrap()["messages"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    host.close(id);
+
+    let prepared = host.prepare(&mcp, "fixture", "app_view").await.unwrap();
+    let id = prepared["id"].as_str().unwrap();
+    let binding = core.bind_app_chat().await.unwrap();
+    let label = host
+        .activate(id, &[], false, Some(binding.clone()), json!({}), json!({}))
+        .unwrap();
+    let payload = json!({"role":"user","content":[{"type":"text","text":"APP_CHAT_ONE"},{"type":"text","text":"second"}]});
+    let early = message(&host, &label, json!(3), "ui/message", payload.clone()).await;
+    assert!(early["response"]["error"].is_object());
+    let ready = initialize(&host, &label).await;
+    assert_eq!(
+        ready["initializeResult"]["hostCapabilities"]["message"],
+        json!({"text":{}})
+    );
+    for invalid in [
+        json!({"role":"assistant","content":[{"type":"text","text":"wrong role"}]}),
+        json!({"role":"user","content":[{"type":"image","data":"AAEC","mimeType":"image/png"}]}),
+        json!({"role":"user","content":[{"type":"text","text":42}]}),
+        json!({"role":"user","content":[]}),
+        json!({"role":"user","content":{"type":"text","text":"  "}}),
+    ] {
+        let response = message(&host, &label, json!(4), "ui/message", invalid).await;
+        assert!(response["response"]["error"].is_object());
+    }
+    assert!(core.snapshot().await.unwrap()["messages"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    let sent = message(&host, &label, json!(5), "ui/message", payload).await;
+    assert_eq!(sent["response"]["result"], json!({}));
+    async fn idle(core: &Core) -> Value {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let snapshot = core.snapshot().await.unwrap();
+                if snapshot["state"]["isStreaming"] == false {
+                    return snapshot;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap()
+    }
+    let snapshot = idle(&core).await;
+    let user = snapshot["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["role"] == "user")
+        .unwrap();
+    assert!(user["content"]
+        .as_str()
+        .unwrap()
+        .contains("APP_CHAT_ONE\nsecond"));
+    assert!(user["content"]
+        .as_str()
+        .unwrap()
+        .contains("MCP App \"fixture\" · \"app_view\""));
+    let first_entry = user["_entryId"].as_str().unwrap().to_owned();
+    let session_id = snapshot["state"]["sessionId"].as_str().unwrap().to_owned();
+    let revoked = AtomicBool::new(false);
+    assert!(binding.send("REVOKED".into(), &revoked).await.is_err());
+    assert_eq!(
+        core.snapshot().await.unwrap()["messages"],
+        snapshot["messages"]
+    );
+
+    let sent = message(
+        &host,
+        &label,
+        json!(6),
+        "ui/message",
+        json!({"role":"user","content":{"type":"text","text":"等待 APP_CHAT_BUSY"}}),
+    )
+    .await;
+    assert_eq!(sent["response"]["result"], json!({}));
+    let busy = message(
+        &host,
+        &label,
+        json!(7),
+        "ui/message",
+        json!({"role":"user","content":{"type":"text","text":"MUST_NOT_QUEUE"}}),
+    )
+    .await;
+    assert!(busy["response"]["error"].is_object());
+    assert_eq!(
+        core.snapshot().await.unwrap()["state"]["pendingMessageCount"],
+        0
+    );
+    core.command("abort", json!({})).await.unwrap();
+    idle(&core).await;
+    core.prepare_message_edit(&session_id, &first_entry)
+        .await
+        .unwrap();
+    let edited = message(
+        &host,
+        &label,
+        json!(8),
+        "ui/message",
+        json!({"role":"user","content":{"type":"text","text":"MUST_NOT_SEND_EDIT"}}),
+    )
+    .await;
+    assert!(edited["response"]["error"].is_object());
+    assert!(!core.snapshot().await.unwrap()["messages"]
+        .to_string()
+        .contains("MUST_NOT_SEND"));
+    host.close(id);
+
+    let before = core.snapshot().await.unwrap();
+    let binding = core.bind_app_chat().await.unwrap();
+    core.connect(ConnectOptions {
+        cwd: Some(work.to_string_lossy().into_owned()),
+        session_path: Some(before["state"]["sessionFile"].as_str().unwrap().to_owned()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    assert!(binding
+        .send("MUST_NOT_RECONNECT".into(), &AtomicBool::new(true))
+        .await
+        .is_err());
+    assert_eq!(
+        core.snapshot().await.unwrap()["messages"],
+        before["messages"]
+    );
+    core.command("prompt", json!({"message":"APP_SAME_PROCESS_SESSION"}))
+        .await
+        .unwrap();
+    let snapshot = idle(&core).await;
+    let entry = snapshot["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["role"] == "user")
+        .unwrap()["_entryId"]
+        .clone();
+    let binding = core.bind_app_chat().await.unwrap();
+    core.current()
+        .await
+        .unwrap()
+        .rpc
+        .call("fork", json!({"entryId":entry}))
+        .await
+        .unwrap();
+    let forked = core.snapshot().await.unwrap();
+    assert_eq!(forked["generation"], snapshot["generation"]);
+    assert_ne!(forked["state"]["sessionId"], snapshot["state"]["sessionId"]);
+    let error = binding
+        .send("MUST_NOT_SWITCH".into(), &AtomicBool::new(true))
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("会话已切换"));
+    assert_eq!(
+        core.snapshot().await.unwrap()["messages"],
+        forked["messages"]
+    );
+    core.shutdown().await;
+    mcp.disconnect("*").await;
+    assert!(host.audit().iter().any(|entry| entry["detail"]
+        .as_str()
+        .is_some_and(|text| text.contains("对话已变更"))));
+}
+
 #[test]
 fn app_resources_validate_html_identity_mime_base64_and_csp() {
     let resource = json!({"contents":[{"uri":"ui://app/test","mimeType":UI_MIME,"text":"<html>你好</html>",
@@ -315,6 +526,7 @@ async fn stdio_apps_negotiate_bind_resources_authorize_and_reject_old_connection
             id,
             &[],
             false,
+            None,
             json!({"count":7}),
             initial["result"].clone(),
         )
@@ -353,10 +565,24 @@ async fn stdio_apps_negotiate_bind_resources_authorize_and_reject_old_connection
     let prepared = host.prepare(&mcp, "fixture", "app_view").await.unwrap();
     let id = prepared["id"].as_str().unwrap();
     assert!(host
-        .activate(id, &["model_only".into()], false, json!({}), json!({}))
+        .activate(
+            id,
+            &["model_only".into()],
+            false,
+            None,
+            json!({}),
+            json!({})
+        )
         .is_err());
     let label = host
-        .activate(id, &["app_refresh".into()], false, json!({}), json!({}))
+        .activate(
+            id,
+            &["app_refresh".into()],
+            false,
+            None,
+            json!({}),
+            json!({}),
+        )
         .unwrap();
     let before_ready = message(
         &host,
@@ -410,6 +636,7 @@ async fn stdio_apps_negotiate_bind_resources_authorize_and_reject_old_connection
             large["id"].as_str().unwrap(),
             &[],
             false,
+            None,
             json!({}),
             json!({}),
         )
@@ -485,6 +712,7 @@ async fn http_apps_use_negotiated_connection_and_preserve_rpc_results() {
             prepared["id"].as_str().unwrap(),
             &["app_refresh".into()],
             false,
+            None,
             json!({}),
             json!({}),
         )
@@ -554,6 +782,7 @@ async fn app_transport_errors_keep_host_diagnostics_in_host_audit() {
                 prepared["id"].as_str().unwrap(),
                 &grants,
                 resources,
+                None,
                 json!({}),
                 json!({}),
             )
@@ -585,7 +814,9 @@ async fn http_app_resources_share_request_limits_and_discard_results_after_close
     let host = Arc::new(McpAppHost::default());
     let prepared = host.prepare(&mcp, "fixture", "app_view").await.unwrap();
     let id = prepared["id"].as_str().unwrap();
-    let label = host.activate(id, &[], false, json!({}), json!({})).unwrap();
+    let label = host
+        .activate(id, &[], false, None, json!({}), json!({}))
+        .unwrap();
     initialize(&host, &label).await;
     let denied = message(
         &host,
@@ -600,7 +831,14 @@ async fn http_app_resources_share_request_limits_and_discard_results_after_close
     let prepared = host.prepare(&mcp, "fixture", "app_view").await.unwrap();
     let id = prepared["id"].as_str().unwrap();
     let label = host
-        .activate(id, &["app_refresh".into()], true, json!({}), json!({}))
+        .activate(
+            id,
+            &["app_refresh".into()],
+            true,
+            None,
+            json!({}),
+            json!({}),
+        )
         .unwrap();
     let ready = initialize(&host, &label).await;
     assert!(ready["initializeResult"]["hostCapabilities"]["serverResources"].is_object());
