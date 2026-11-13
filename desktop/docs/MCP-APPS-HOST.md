@@ -39,8 +39,6 @@ Core 新增绑定对象的创建与发送方法，在现有操作锁内核对会
 
 复用已有带令牌的扩展通道，Pi 发出 `extension_ui_request {method:"input",title:"PI_DESKTOP_APP_CONTEXT",placeholder:JSON.stringify({token,sessionId})}`，原生宿主返回 `{contexts:[{id,source,content?,structuredContent?,timestamp}]}`。通道按活动 Pi 连接代次、令牌、会话和 App 授权核验，内部查询在宿主处理。
 
-## 子窗口接口
-
 ## 资源订阅增量契约
 
 `codex/mcp-app-resource-subscriptions` 按当前 MCP 2025-06-18 会话语义增加资源订阅。App 侧通过 `hostCapabilities.experimental["pi-desktop/resource-subscriptions"] = {maxSubscriptions:64}` 声明可选能力；资源目录通知通过标准 serverResources.listChanged 声明。此接入属于 Pi Desktop 可选扩展。[MCP 资源协议](https://modelcontextprotocol.io/specification/2025-06-18/server/resources) [Apps 订阅提案](https://github.com/modelcontextprotocol/ext-apps/issues/659)
@@ -51,6 +49,8 @@ Core 新增绑定对象的创建与发送方法，在现有操作锁内核对会
 
 新增窗口接口 `widget_command {operation:"app-notifications"}`，响应 `{notifications:[]}`，按实际窗口标签验证并等待至多 30 秒。app-bootstrap 增加 resourceNotifications 布尔值，前端据此建立等待循环并向 iframe 转发通知。关闭立即撤销投递并唤醒等待，后台在总计 3 秒内尽力取消已无人使用的远端订阅，失败写入宿主审计。失败的订阅变更在后续显式请求中重新确认。
 
+
+## 子窗口接口
 
 新增受窗口标签约束的 `widget_command {operation,payload}`，只允许 `identity`、`invoke`、`app-bootstrap`、`app-rpc`、`app-close`。最后一项仅关闭调用方自己的 App 窗口。身份从实际窗口反查，主窗口通用命令仍执行原有 main-only 校验。
 
