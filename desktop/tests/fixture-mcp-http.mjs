@@ -7,6 +7,8 @@ const record = value => appendFileSync(log, JSON.stringify(value) + '\n');
 let revision = 0;
 const streams = new Set();
 const heldResourceReplies = [];
+const resourceSubscriptions=new Set();
+const failedUnsubscribes=new Set();
 const json = (res, status, value, headers = {}) => {
   const body = JSON.stringify(value);
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': Buffer.byteLength(body), ...headers });
@@ -26,7 +28,7 @@ const server = http.createServer(async (req, res) => {
   if (message.method === 'initialize') {
     if (mode === 'slow') await new Promise(resolve => setTimeout(resolve, 300));
     const headers = mode === 'stateless' ? {} : { 'Mcp-Session-Id': mode === 'bad-session' ? 'invalid session' : 'fixture-session' };
-    const capabilities = mode === 'apps' ? {tools:{},resources:{}} : mode === 'content-only' ? { resources: {}, prompts: {} } : { tools: { listChanged: true } };
+    const capabilities = mode === 'apps' ? {tools:{},resources:{subscribe:true,listChanged:true}} : mode === 'content-only' ? { resources: {}, prompts: {} } : { tools: { listChanged: true } };
     json(res, 200, { jsonrpc: '2.0', id: message.id, result: { protocolVersion: '2025-06-18', serverInfo: { name: 'http-fixture', version: '1' }, capabilities } }, headers);
     return;
   }
@@ -47,7 +49,22 @@ const server = http.createServer(async (req, res) => {
   }
   if (mode === 'apps') {
     const reply = result => json(res, 200, {jsonrpc:'2.0',id:message.id,result});
-    if (message.method === 'tools/list') reply({tools:[
+    if (message.method === 'resources/subscribe') {
+      if (message.params.uri==='fixture://reject-subscribe') {
+        json(res,200,{jsonrpc:'2.0',id:message.id,error:{code:-32002,message:'Resource not found'}});
+      } else {
+        if (message.params.uri==='fixture://slow-subscribe') await new Promise(resolve=>setTimeout(resolve,300));
+        resourceSubscriptions.add(message.params.uri);reply({});
+      }
+    }
+    else if (message.method === 'resources/unsubscribe') {
+      const uri=message.params.uri;
+      if (['fixture://unsubscribe-failure','fixture://cleanup-failure'].includes(uri) && !failedUnsubscribes.has(uri)) {
+        failedUnsubscribes.add(uri);
+        json(res,200,{jsonrpc:'2.0',id:message.id,error:{code:-32603,message:'HOST_DIAGNOSTIC_SECRET'}});
+      } else { resourceSubscriptions.delete(uri);reply({}); }
+    }
+    else if (message.method === 'tools/list') reply({tools:[
       {name:'app_view',inputSchema:{type:'object'},_meta:{ui:{resourceUri:'ui://fixture/app'}}},
       {name:'app_refresh',inputSchema:{type:'object'},_meta:{ui:{visibility:['app']}}},
       {name:'model_only',inputSchema:{type:'object'},_meta:{ui:{visibility:['model']}}},
@@ -60,6 +77,7 @@ const server = http.createServer(async (req, res) => {
         reply({contents:[{uri,text:'你好🙂 HTTP App resource',mimeType:'text/plain'}],_meta:{source:'http-app-resource'}});
       }
       else if (uri === 'fixture://binary') reply({contents:[{uri,blob:'AAEC',mimeType:'application/octet-stream'}]});
+      else if (uri === 'fixture://live') reply({contents:[{uri,text:'LIVE_REVISION:'+revision,mimeType:'text/plain'}]});
       else if (uri === 'fixture://held') heldResourceReplies.push(() => reply({contents:[{uri,text:'late resource result'}]}));
       else if (uri === 'fixture://oversized') reply({contents:[{uri,text:'x'.repeat(256*1024)}]});
       else if (uri === 'fixture://malformed') reply({contents:'invalid'});
@@ -71,6 +89,16 @@ const server = http.createServer(async (req, res) => {
       }
       reply({content:[{type:'text',text:'HTTP App result'}],
         structuredContent:{count:message.params.arguments.count || 1}});
+      if (message.params.name==='app_stream_break') {
+        revision++;
+        for (const stream of streams) stream.end();
+      } else if (message.params.name==='app_refresh') {
+        revision++;
+        for (const stream of streams) {
+          for (const uri of [...resourceSubscriptions,'fixture://unsubscribed']) sse(stream,{jsonrpc:'2.0',method:'notifications/resources/updated',params:{uri}},'resource-'+revision);
+          sse(stream,{jsonrpc:'2.0',method:'notifications/resources/list_changed'},'resource-'+revision);
+        }
+      }
     }
     else json(res,200,{jsonrpc:'2.0',id:message.id,error:{code:-32601,message:'Method unavailable'}});
     return;

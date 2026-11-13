@@ -70,7 +70,7 @@ export function McpAppLauncher({ name, tool, arguments: args, result, onError }:
     <label className="widget-grant">
       <input type="checkbox" checked={allowResources} disabled={busy || opened}
         onChange={event => setAllowResources(event.target.checked)} />
-      <span>允许 App 读取此服务器的资源<small>此窗口可请求该服务器提供的任意资源 URI。</small></span>
+      <span>允许 App 读取此服务器的资源<small>可请求此连接的资源 URI，并按需订阅更新通知。</small></span>
     </label>
     <p className="setting-help">仅勾选的工具可由此 App 调用。内容由上述服务器提供。</p>
     <label className="widget-grant">

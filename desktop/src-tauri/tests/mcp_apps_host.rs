@@ -687,6 +687,267 @@ async fn stdio_apps_negotiate_bind_resources_authorize_and_reject_old_connection
 
 struct HttpFixture(Child);
 
+#[tokio::test]
+async fn stdio_resource_subscriptions_share_wire_state_and_cleanup_the_last_window() {
+    use std::{sync::Arc, time::Duration};
+    let root = tempfile::tempdir().unwrap();
+    let log = root.path().join("subscriptions.jsonl");
+    let mcp = manager(
+        root.path(),
+        json!({"command":env!("CARGO_BIN_EXE_mcp-fixture"),"args":["--apps","--log",log]}),
+    );
+    let host = Arc::new(McpAppHost::default());
+    let prepared = host.prepare(&mcp, "fixture", "app_view").await.unwrap();
+    let id = prepared["id"].as_str().unwrap();
+    let denied = host
+        .activate(id, &[], false, None, json!({}), json!({}))
+        .unwrap();
+    initialize(&host, &denied).await;
+    assert_eq!(
+        host.bootstrap(&denied).unwrap()["resourceNotifications"],
+        false
+    );
+    assert!(host.notifications(&denied).await.is_err());
+    let reply = message(
+        &host,
+        &denied,
+        json!(2),
+        "resources/subscribe",
+        json!({"uri":"fixture://failure"}),
+    )
+    .await;
+    assert_eq!(reply["response"]["error"]["code"], -32000);
+    mcp.call("fixture", "app_refresh", json!({})).await.unwrap();
+    host.close(id);
+    let mut windows = Vec::new();
+    for _ in 0..2 {
+        let prepared = host.prepare(&mcp, "fixture", "app_view").await.unwrap();
+        let id = prepared["id"].as_str().unwrap().to_owned();
+        let label = host
+            .activate(&id, &[], true, None, json!({}), json!({}))
+            .unwrap();
+        let ready = initialize(&host, &label).await;
+        assert_eq!(
+            ready["initializeResult"]["hostCapabilities"]["experimental"]
+                ["pi-desktop/resource-subscriptions"]["maxSubscriptions"],
+            64
+        );
+        assert_eq!(
+            host.bootstrap(&label).unwrap()["resourceNotifications"],
+            true
+        );
+        for request in [3, 4] {
+            let reply = message(
+                &host,
+                &label,
+                json!(request),
+                "resources/subscribe",
+                json!({"uri":"fixture://live"}),
+            )
+            .await;
+            assert_eq!(reply["response"]["result"], json!({}));
+        }
+        windows.push((id, label));
+    }
+    mcp.call("fixture", "app_refresh", json!({})).await.unwrap();
+    for (_, label) in &windows {
+        let batch = tokio::time::timeout(Duration::from_secs(3), host.notifications(label))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(batch["notifications"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["params"]["uri"] == "fixture://live"));
+        assert!(!batch.to_string().contains("fixture://unsubscribed"));
+    }
+    let reply = message(
+        &host,
+        &windows[0].1,
+        json!(5),
+        "resources/unsubscribe",
+        json!({"uri":"fixture://live"}),
+    )
+    .await;
+    assert_eq!(reply["response"]["result"], json!({}));
+    mcp.call("fixture", "app_refresh", json!({})).await.unwrap();
+    let first = tokio::time::timeout(Duration::from_secs(3), host.notifications(&windows[0].1))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!first.to_string().contains("fixture://live"));
+    let second = tokio::time::timeout(Duration::from_secs(3), host.notifications(&windows[1].1))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(second.to_string().contains("fixture://live"));
+    host.close(&windows[1].0);
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if fs::read_to_string(&log).unwrap().lines().any(|line| {
+                let value: Value = serde_json::from_str(line).unwrap();
+                value["method"] == "resources/unsubscribe"
+                    && value["params"]["uri"] == "fixture://live"
+            }) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    host.close(&windows[0].0);
+    let records = fs::read_to_string(&log)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        records
+            .iter()
+            .filter(|entry| entry["method"] == "resources/subscribe"
+                && entry["params"]["uri"] == "fixture://live")
+            .count(),
+        1
+    );
+    assert_eq!(
+        records
+            .iter()
+            .filter(|entry| entry["method"] == "resources/unsubscribe"
+                && entry["params"]["uri"] == "fixture://live")
+            .count(),
+        1
+    );
+    assert!(!records
+        .iter()
+        .any(|entry| entry["params"]["uri"] == "fixture://failure"));
+    let prepared = host.prepare(&mcp, "fixture", "app_view").await.unwrap();
+    let id = prepared["id"].as_str().unwrap();
+    let label = host
+        .activate(id, &[], true, None, json!({}), json!({}))
+        .unwrap();
+    initialize(&host, &label).await;
+    let waiting_host = host.clone();
+    let waiting_label = label.clone();
+    let waiting = tokio::spawn(async move { waiting_host.notifications(&waiting_label).await });
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    assert!(!waiting.is_finished());
+    host.close(id);
+    assert!(tokio::time::timeout(Duration::from_secs(1), waiting)
+        .await
+        .unwrap()
+        .unwrap()
+        .is_err());
+    mcp.disconnect("*").await;
+}
+
+#[tokio::test]
+async fn resource_subscription_limits_and_missing_capability_are_enforced() {
+    let root = tempfile::tempdir().unwrap();
+    let mcp = stdio_manager(root.path());
+    let host = McpAppHost::default();
+    let mut windows = Vec::new();
+    for index in 0..4 {
+        let prepared = host.prepare(&mcp, "fixture", "app_view").await.unwrap();
+        let id = prepared["id"].as_str().unwrap().to_owned();
+        let label = host
+            .activate(&id, &[], true, None, json!({}), json!({}))
+            .unwrap();
+        initialize(&host, &label).await;
+        for item in 0..64 {
+            let reply = message(
+                &host,
+                &label,
+                json!(item + 2),
+                "resources/subscribe",
+                json!({"uri":format!("fixture://limit/{index}/{item}")}),
+            )
+            .await;
+            assert_eq!(reply["response"]["result"], json!({}), "{reply}");
+        }
+        let excess = message(
+            &host,
+            &label,
+            json!(70),
+            "resources/subscribe",
+            json!({"uri":"fixture://excess"}),
+        )
+        .await;
+        assert!(excess["response"]["error"].is_object());
+        windows.push((id, label));
+    }
+    let prepared = host.prepare(&mcp, "fixture", "app_view").await.unwrap();
+    let id = prepared["id"].as_str().unwrap();
+    let extra = host
+        .activate(id, &[], true, None, json!({}), json!({}))
+        .unwrap();
+    initialize(&host, &extra).await;
+    assert!(message(
+        &host,
+        &extra,
+        json!(2),
+        "resources/subscribe",
+        json!({"uri":"fixture://connection-limit"})
+    )
+    .await["response"]["error"]
+        .is_object());
+    assert_eq!(
+        message(
+            &host,
+            &extra,
+            json!(3),
+            "resources/subscribe",
+            json!({"uri":"fixture://limit/0/0"})
+        )
+        .await["response"]["result"],
+        json!({})
+    );
+    mcp.call("fixture", "app_refresh", json!({})).await.unwrap();
+    for (_, label) in &windows {
+        let events = host.notifications(label).await.unwrap();
+        let updated = events["notifications"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|entry| entry["method"] == "notifications/resources/updated")
+            .count();
+        assert_eq!(
+            updated, 64,
+            "A lagged receiver must refresh every owned URI"
+        );
+    }
+    host.close(id);
+    for (id, _) in windows {
+        host.close(&id);
+    }
+    mcp.disconnect("*").await;
+
+    let unsupported = tempfile::tempdir().unwrap();
+    let mcp = manager(
+        unsupported.path(),
+        json!({"command":env!("CARGO_BIN_EXE_mcp-fixture"),"args":["--apps","--no-subscriptions"]}),
+    );
+    let prepared = host.prepare(&mcp, "fixture", "app_view").await.unwrap();
+    let id = prepared["id"].as_str().unwrap();
+    let label = host
+        .activate(id, &[], true, None, json!({}), json!({}))
+        .unwrap();
+    let ready = initialize(&host, &label).await;
+    assert!(ready["initializeResult"]["hostCapabilities"]["experimental"].is_null());
+    assert!(message(
+        &host,
+        &label,
+        json!(2),
+        "resources/subscribe",
+        json!({"uri":"fixture://live"})
+    )
+    .await["response"]["error"]
+        .is_object());
+    host.close(id);
+    mcp.disconnect("*").await;
+}
+
 #[cfg(feature = "test-fixture")]
 #[tokio::test]
 async fn app_model_contexts_are_latest_scoped_and_removed_without_changing_history() {
@@ -1013,6 +1274,296 @@ impl Drop for HttpFixture {
         let _ = self.0.kill();
         let _ = self.0.wait();
     }
+}
+
+#[tokio::test]
+async fn http_resource_notifications_recover_streams_and_mutation_failures() {
+    use std::time::Duration;
+    let root = tempfile::tempdir().unwrap();
+    let log = root.path().join("subscription-http.jsonl");
+    let (_fixture, url) = HttpFixture::start(&log);
+    let mcp = manager(root.path(), json!({"url":url}));
+    let host = McpAppHost::default();
+    let prepared = host.prepare(&mcp, "fixture", "app_view").await.unwrap();
+    let id = prepared["id"].as_str().unwrap();
+    let label = host
+        .activate(id, &[], true, None, json!({}), json!({}))
+        .unwrap();
+    initialize(&host, &label).await;
+    async fn stream_count(log: &std::path::Path, count: usize) {
+        tokio::time::timeout(Duration::from_secs(8), async {
+            loop {
+                if fs::read_to_string(log)
+                    .unwrap()
+                    .lines()
+                    .filter(|line| line.contains("stream-open"))
+                    .count()
+                    >= count
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+    stream_count(&log, 1).await;
+    for uri in ["fixture://live", "fixture://unsubscribe-failure"] {
+        assert_eq!(
+            message(
+                &host,
+                &label,
+                json!(2),
+                "resources/subscribe",
+                json!({"uri":uri})
+            )
+            .await["response"]["result"],
+            json!({})
+        );
+    }
+    let rejected = message(
+        &host,
+        &label,
+        json!(3),
+        "resources/subscribe",
+        json!({"uri":"fixture://reject-subscribe"}),
+    )
+    .await;
+    assert!(rejected["response"]["error"].is_object());
+    let failed = message(
+        &host,
+        &label,
+        json!(4),
+        "resources/unsubscribe",
+        json!({"uri":"fixture://unsubscribe-failure"}),
+    )
+    .await;
+    assert!(failed["response"]["error"].is_object());
+    assert!(!failed.to_string().contains("HOST_DIAGNOSTIC_SECRET"));
+    assert_eq!(
+        message(
+            &host,
+            &label,
+            json!(5),
+            "resources/subscribe",
+            json!({"uri":"fixture://unsubscribe-failure"})
+        )
+        .await["response"]["result"],
+        json!({})
+    );
+    mcp.call("fixture", "app_refresh", json!({})).await.unwrap();
+    async fn update(host: &McpAppHost, label: &str, uri: &str) {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let batch = host.notifications(label).await.unwrap();
+                assert!(!batch.to_string().contains("fixture://unsubscribed"));
+                if batch["notifications"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|entry| entry["params"]["uri"] == uri)
+                {
+                    break;
+                }
+            }
+        })
+        .await
+        .unwrap();
+    }
+    update(&host, &label, "fixture://live").await;
+    assert!(mcp
+        .read_resource("fixture", "fixture://live")
+        .await
+        .unwrap()["result"]["contents"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("LIVE_REVISION:1"));
+    mcp.call("fixture", "app_stream_break", json!({}))
+        .await
+        .unwrap();
+    stream_count(&log, 2).await;
+    update(&host, &label, "fixture://live").await;
+    assert!(mcp
+        .read_resource("fixture", "fixture://live")
+        .await
+        .unwrap()["result"]["contents"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("LIVE_REVISION:2"));
+    let records = fs::read_to_string(&log)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        records
+            .iter()
+            .filter(
+                |record| record["message"]["method"] == "resources/subscribe"
+                    && record["message"]["params"]["uri"] == "fixture://live"
+            )
+            .count(),
+        1
+    );
+    assert_eq!(
+        records
+            .iter()
+            .filter(
+                |record| record["message"]["method"] == "resources/subscribe"
+                    && record["message"]["params"]["uri"] == "fixture://unsubscribe-failure"
+            )
+            .count(),
+        1
+    );
+    assert!(records
+        .iter()
+        .any(|record| record["method"] == "GET"
+            && record["headers"]["last-event-id"] == "resource-1"));
+    assert!(records
+        .iter()
+        .filter(|record| record["message"]["method"] == "resources/subscribe")
+        .all(|record| record["headers"]["mcp-session-id"] == "fixture-session"));
+    host.close(id);
+
+    let prepared = host.prepare(&mcp, "fixture", "app_view").await.unwrap();
+    let cleanup_id = prepared["id"].as_str().unwrap();
+    let cleanup = host
+        .activate(cleanup_id, &[], true, None, json!({}), json!({}))
+        .unwrap();
+    initialize(&host, &cleanup).await;
+    message(
+        &host,
+        &cleanup,
+        json!(6),
+        "resources/subscribe",
+        json!({"uri":"fixture://cleanup-failure"}),
+    )
+    .await;
+    host.close(cleanup_id);
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !host.audit().iter().any(|entry| {
+            entry["api"]
+                .as_str()
+                .unwrap()
+                .ends_with("resources/cleanup")
+        }) {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let prepared = host.prepare(&mcp, "fixture", "app_view").await.unwrap();
+    let fresh_id = prepared["id"].as_str().unwrap();
+    let fresh = host
+        .activate(fresh_id, &[], true, None, json!({}), json!({}))
+        .unwrap();
+    initialize(&host, &fresh).await;
+    assert_eq!(
+        message(
+            &host,
+            &fresh,
+            json!(7),
+            "resources/subscribe",
+            json!({"uri":"fixture://cleanup-failure"})
+        )
+        .await["response"]["result"],
+        json!({})
+    );
+    let repaired = fs::read_to_string(&log)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        repaired
+            .iter()
+            .filter(
+                |record| record["message"]["method"] == "resources/subscribe"
+                    && record["message"]["params"]["uri"] == "fixture://cleanup-failure"
+            )
+            .count(),
+        2
+    );
+    mcp.disconnect("fixture").await;
+    mcp.connect("fixture").await.unwrap();
+    assert!(host.notifications(&fresh).await.is_err());
+    assert!(message(
+        &host,
+        &fresh,
+        json!(8),
+        "resources/subscribe",
+        json!({"uri":"fixture://live"})
+    )
+    .await["response"]["error"]
+        .is_object());
+    host.close(fresh_id);
+    mcp.disconnect("*").await;
+}
+
+#[tokio::test]
+async fn closing_during_a_committed_subscription_releases_its_late_acknowledgement() {
+    use std::{sync::Arc, time::Duration};
+    let root = tempfile::tempdir().unwrap();
+    let log = root.path().join("late-subscribe.jsonl");
+    let (_fixture, url) = HttpFixture::start(&log);
+    let mcp = manager(root.path(), json!({"url":url}));
+    let host = Arc::new(McpAppHost::default());
+    let prepared = host.prepare(&mcp, "fixture", "app_view").await.unwrap();
+    let id = prepared["id"].as_str().unwrap();
+    let label = host
+        .activate(id, &[], true, None, json!({}), json!({}))
+        .unwrap();
+    initialize(&host, &label).await;
+    let pending_host = host.clone();
+    let pending_label = label.clone();
+    let pending = tokio::spawn(async move {
+        message(
+            &pending_host,
+            &pending_label,
+            json!(2),
+            "resources/subscribe",
+            json!({"uri":"fixture://slow-subscribe"}),
+        )
+        .await
+    });
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while !fs::read_to_string(&log).unwrap().contains("slow-subscribe") {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    host.close(id);
+    assert!(tokio::time::timeout(Duration::from_secs(3), pending)
+        .await
+        .unwrap()
+        .unwrap()["response"]["error"]
+        .is_object());
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            let records = fs::read_to_string(&log)
+                .unwrap()
+                .lines()
+                .map(|line| serde_json::from_str::<Value>(line).unwrap())
+                .collect::<Vec<_>>();
+            let count = records
+                .iter()
+                .filter(|entry| {
+                    entry["message"]["method"] == "resources/unsubscribe"
+                        && entry["message"]["params"]["uri"] == "fixture://slow-subscribe"
+                })
+                .count();
+            if count > 0 {
+                assert_eq!(count, 1);
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    mcp.disconnect("*").await;
 }
 
 #[tokio::test]

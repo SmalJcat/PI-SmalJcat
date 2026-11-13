@@ -1,6 +1,7 @@
 // MCP 夹具服务器（仅测试用）：在 stdin/stdout 上实现最小 JSON-RPC，用来端到端验证桌面端 MCP 客户端。
 // 不依赖任何外部运行时，也不访问网络。
 use serde_json::{json, Value};
+use std::collections::BTreeSet;
 use std::io::{BufRead, Write};
 
 fn main() {
@@ -9,12 +10,28 @@ fn main() {
     let mut writer = stdout.lock();
     let content_only = std::env::args().any(|arg| arg == "--content-only");
     let apps = std::env::args().any(|arg| arg == "--apps");
+    let no_subscriptions = std::env::args().any(|arg| arg == "--no-subscriptions");
+    let arguments = std::env::args().collect::<Vec<_>>();
+    let mut log = arguments
+        .windows(2)
+        .find(|pair| pair[0] == "--log")
+        .map(|pair| {
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&pair[1])
+                .unwrap()
+        });
+    let mut subscriptions = BTreeSet::<String>::new();
+    let mut revision = 0;
     if std::env::args().any(|arg| arg == "--diagnostic-secret") {
         eprintln!("HOST_DIAGNOSTIC_SECRET fixture-only");
     }
     let mut supports_apps = false;
     let capabilities = if content_only {
         json!({"resources": {}, "prompts": {}})
+    } else if apps && !no_subscriptions {
+        json!({"tools":{"listChanged":true},"resources":{"subscribe":true,"listChanged":true},"prompts":{}})
     } else {
         json!({"tools": {"listChanged": true}, "resources": {}, "prompts": {}})
     };
@@ -26,6 +43,10 @@ fn main() {
         let Ok(message) = serde_json::from_str::<Value>(&line) else {
             continue;
         };
+        if let Some(log) = log.as_mut() {
+            writeln!(log, "{message}").unwrap();
+            log.flush().unwrap();
+        }
         let method = message["method"].as_str().unwrap_or_default().to_owned();
         if method == "initialize" {
             supports_apps = message["params"]["capabilities"]["extensions"]
@@ -48,6 +69,23 @@ fn main() {
             continue;
         }
         let result = match method.as_str() {
+            "resources/subscribe" if apps => {
+                let uri = message["params"]["uri"].as_str().unwrap_or_default();
+                if uri == "fixture://failure" {
+                    std::process::exit(9);
+                }
+                if uri == "fixture://reject-subscribe" {
+                    writeln!(writer,"{}",json!({"jsonrpc":"2.0","id":id,"error":{"code":-32002,"message":"Resource not found"}})).unwrap();
+                    writer.flush().unwrap();
+                    continue;
+                }
+                subscriptions.insert(uri.to_owned());
+                json!({})
+            }
+            "resources/unsubscribe" if apps => {
+                subscriptions.remove(message["params"]["uri"].as_str().unwrap_or_default());
+                json!({})
+            }
             "initialize" => json!({
                 "protocolVersion": message["params"]["protocolVersion"].clone(),
                 "capabilities": capabilities,
@@ -100,6 +138,9 @@ fn main() {
                 }
                 "fixture://binary" => {
                     json!({"contents":[{"uri":"fixture://binary","mimeType":"application/octet-stream","blob":"AAEC"}]})
+                }
+                "fixture://live" if apps => {
+                    json!({"contents":[{"uri":"fixture://live","mimeType":"text/plain","text":format!("LIVE_REVISION:{revision}")}]})
                 }
                 "fixture://oversized" => {
                     json!({"contents":[{"uri":"fixture://oversized","text":"x".repeat(256 * 1024)}]})
@@ -168,5 +209,21 @@ fn main() {
         let response = json!({ "jsonrpc": "2.0", "id": id, "result": result });
         writeln!(writer, "{response}").ok();
         writer.flush().ok();
+        if apps && method == "tools/call" && message["params"]["name"] == "app_refresh" {
+            revision += 1;
+            for uri in subscriptions
+                .iter()
+                .chain(std::iter::once(&"fixture://unsubscribed".to_owned()))
+            {
+                writeln!(writer,"{}",json!({"jsonrpc":"2.0","method":"notifications/resources/updated","params":{"uri":uri}})).unwrap();
+            }
+            writeln!(
+                writer,
+                "{}",
+                json!({"jsonrpc":"2.0","method":"notifications/resources/list_changed"})
+            )
+            .unwrap();
+            writer.flush().unwrap();
+        }
     }
 }

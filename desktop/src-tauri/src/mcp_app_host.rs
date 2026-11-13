@@ -3,19 +3,21 @@ use crate::{
     core::{AppChatBinding, AppModelContext},
     mcp_apps::AuditEntry,
     mcp_client::{McpManager, McpSession},
+    mcp_subscriptions::{validate_uri, ResourceEvent, MAX_APP_SUBSCRIPTIONS},
 };
 use anyhow::{bail, Context, Result};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{BTreeSet, HashMap, HashSet, VecDeque},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
+use tokio::sync::{broadcast, watch, Mutex as AsyncMutex};
 use uuid::Uuid;
 
 pub const UI_VERSION: &str = "2026-01-26";
@@ -181,6 +183,13 @@ struct App {
     tools: Vec<Value>,
     created: Instant,
     state: Mutex<AppState>,
+    notifications: AsyncMutex<AppNotifications>,
+    closed: watch::Sender<bool>,
+}
+
+struct AppNotifications {
+    receiver: broadcast::Receiver<ResourceEvent>,
+    last_sent: Option<Instant>,
 }
 
 struct RequestGuard {
@@ -218,7 +227,7 @@ impl Drop for RequestGuard {
 #[derive(Default)]
 pub struct McpAppHost {
     sessions: Mutex<HashMap<String, Arc<App>>>,
-    audit: Mutex<VecDeque<AuditEntry>>,
+    audit: Arc<Mutex<VecDeque<AuditEntry>>>,
 }
 
 impl McpAppHost {
@@ -254,6 +263,11 @@ impl McpAppHost {
         let app = Arc::new(App {
             id: id.clone(),
             active: Arc::new(AtomicBool::new(false)),
+            notifications: AsyncMutex::new(AppNotifications {
+                receiver: connection.resource_events.subscribe(),
+                last_sent: None,
+            }),
+            closed: watch::channel(false).0,
             connection,
             tool,
             uri: uri.clone(),
@@ -371,9 +385,13 @@ impl McpAppHost {
 
     pub fn bootstrap(&self, label: &str) -> Result<Value> {
         let app = self.for_window(label)?;
+        let resources = app.connection.resource_capabilities();
+        let notifications = app.state.lock().unwrap().allow_resources
+            && app.connection.connected()
+            && (resources["subscribe"] == true || resources["listChanged"] == true);
         Ok(
             json!({"kind":"mcp","id":app.id,"server":app.connection.name,
-            "title":app.tool["name"],"uri":app.uri}),
+            "title":app.tool["name"],"uri":app.uri,"resourceNotifications":notifications}),
         )
     }
 
@@ -388,6 +406,21 @@ impl McpAppHost {
     pub fn close(&self, id: &str) {
         if let Some(app) = self.sessions.lock().unwrap().remove(id) {
             app.active.store(false, Ordering::SeqCst);
+            app.closed.send_replace(true);
+            let audit = self.audit.clone();
+            let owner = app.id.clone();
+            app.connection
+                .release_resource_owner(owner.clone(), move |result| {
+                    if let Err(error) = result {
+                        Self::record_into(
+                            &audit,
+                            &owner,
+                            "resources/cleanup",
+                            false,
+                            &format!("{error:#}"),
+                        );
+                    }
+                });
             self.record(id, "close", true, "App 会话已关闭");
         }
     }
@@ -413,7 +446,17 @@ impl McpAppHost {
     }
 
     fn record(&self, id: &str, method: &str, ok: bool, detail: &str) {
-        let mut audit = self.audit.lock().unwrap();
+        Self::record_into(&self.audit, id, method, ok, detail);
+    }
+
+    fn record_into(
+        entries: &Mutex<VecDeque<AuditEntry>>,
+        id: &str,
+        method: &str,
+        ok: bool,
+        detail: &str,
+    ) {
+        let mut audit = entries.lock().unwrap();
         while audit.len() >= 200 {
             audit.pop_front();
         }
@@ -426,6 +469,88 @@ impl McpAppHost {
             ok,
             detail: detail.chars().take(300).collect(),
         });
+    }
+
+    pub async fn notifications(&self, label: &str) -> Result<Value> {
+        let app = self.for_window(label)?;
+        if !app.state.lock().unwrap().allow_resources {
+            bail!("App 未获授权读取服务器资源");
+        }
+        let mut stream = app
+            .notifications
+            .try_lock()
+            .context("App 通知请求正在等待")?;
+        let mut closed = app.closed.subscribe();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+        loop {
+            if !app.active.load(Ordering::SeqCst) || *closed.borrow() {
+                bail!("App 已关闭");
+            }
+            if !app.connection.connected() {
+                bail!("MCP 连接已断开，请重新打开 App");
+            }
+            let received = tokio::select! {
+                _=closed.changed()=>bail!("App 已关闭"),
+                value=tokio::time::timeout_at(deadline,stream.receiver.recv())=>value,
+            };
+            let first = match received {
+                Ok(value) => value,
+                Err(_) => return Ok(json!({"notifications":[]})),
+            };
+            let mut uris = BTreeSet::new();
+            let mut resync = false;
+            let mut events = vec![first];
+            for _ in 0..128 {
+                match stream.receiver.try_recv() {
+                    Ok(event) => events.push(Ok(event)),
+                    Err(broadcast::error::TryRecvError::Lagged(_)) => resync = true,
+                    Err(broadcast::error::TryRecvError::Empty) => break,
+                    Err(broadcast::error::TryRecvError::Closed) => bail!("MCP 通知连接已关闭"),
+                }
+            }
+            for event in events {
+                match event {
+                    Ok(ResourceEvent::Updated(uri)) => {
+                        uris.insert(uri);
+                    }
+                    Ok(ResourceEvent::ListChanged)
+                    | Err(broadcast::error::RecvError::Lagged(_)) => resync = true,
+                    Ok(ResourceEvent::Closed) | Err(broadcast::error::RecvError::Closed) => {
+                        bail!("MCP 连接已断开，请重新打开 App")
+                    }
+                }
+            }
+            if resync {
+                uris.extend(app.connection.subscriptions.uris(&app.id));
+            }
+            uris.retain(|uri| app.connection.subscriptions.owns(&app.id, uri));
+            let catalog = resync && app.connection.resource_capabilities()["listChanged"] == true;
+            if uris.is_empty() && !catalog || !app.state.lock().unwrap().ready {
+                continue;
+            }
+            let delay = stream
+                .last_sent
+                .map(|last| Duration::from_millis(100).saturating_sub(last.elapsed()))
+                .unwrap_or_default();
+            tokio::select! { _=closed.changed()=>bail!("App 已关闭"), _=tokio::time::sleep(delay)=>{} }
+            if !app.active.load(Ordering::SeqCst) || !app.connection.connected() {
+                bail!("App 或 MCP 连接已关闭");
+            }
+            if !app.state.lock().unwrap().ready {
+                continue;
+            }
+            uris.retain(|uri| app.connection.subscriptions.owns(&app.id, uri));
+            let mut notifications=uris.into_iter().map(|uri|json!({"jsonrpc":"2.0","method":"notifications/resources/updated","params":{"uri":uri}})).collect::<Vec<_>>();
+            if catalog {
+                notifications
+                    .push(json!({"jsonrpc":"2.0","method":"notifications/resources/list_changed"}));
+            }
+            if notifications.is_empty() {
+                continue;
+            }
+            stream.last_sent = Some(Instant::now());
+            return Ok(json!({"notifications":notifications}));
+        }
     }
 
     pub async fn message(&self, label: &str, raw: &str) -> Value {
@@ -478,6 +603,8 @@ impl McpAppHost {
                         | "ui/notifications/initialized"
                         | "tools/call"
                         | "resources/read"
+                        | "resources/subscribe"
+                        | "resources/unsubscribe"
                         | "ui/message"
                         | "ui/update-model-context"
                         | "ping"
@@ -528,6 +655,13 @@ impl McpAppHost {
                     "sandbox":{"permissions":{},"csp":app.domains}});
                 if state.allow_resources {
                     capabilities["serverResources"] = json!({});
+                    let resources = app.connection.resource_capabilities();
+                    if resources["listChanged"] == true {
+                        capabilities["serverResources"]["listChanged"] = json!(true);
+                    }
+                    if resources["subscribe"] == true {
+                        capabilities["experimental"] = json!({"pi-desktop/resource-subscriptions":{"maxSubscriptions":MAX_APP_SUBSCRIPTIONS}});
+                    }
                 }
                 if state.chat.is_some() {
                     capabilities["message"] = json!({"text":{}});
@@ -628,18 +762,39 @@ impl McpAppHost {
                 }
                 Ok((json!({}), vec![]))
             }
+            "resources/subscribe" | "resources/unsubscribe" if !notification => {
+                if !app.state.lock().unwrap().allow_resources {
+                    bail!("App 未获授权读取服务器资源");
+                }
+                if app.connection.resource_capabilities()["subscribe"] != true {
+                    bail!("服务器未声明资源订阅能力");
+                }
+                let uri = params["uri"].as_str().context("缺少资源 URI")?;
+                validate_uri(uri)?;
+                let _request = RequestGuard::begin(&app, &message["id"])?;
+                let result = if method == "resources/subscribe" {
+                    app.connection
+                        .subscriptions
+                        .subscribe(&app.connection, &app.id, uri, &app.active)
+                        .await
+                } else {
+                    app.connection
+                        .subscriptions
+                        .unsubscribe(&app.connection, &app.id, uri, &app.active)
+                        .await
+                };
+                result.context("MCP 资源订阅变更失败，请查看宿主审计")?;
+                if !app.active.load(Ordering::SeqCst) {
+                    bail!("App 已关闭");
+                }
+                Ok((json!({}), vec![]))
+            }
             "resources/read" if !notification => {
                 if !app.state.lock().unwrap().allow_resources {
                     bail!("App 未获授权读取服务器资源");
                 }
                 let uri = params["uri"].as_str().context("缺少资源 URI")?;
-                if uri.is_empty()
-                    || uri.len() > 4096
-                    || uri.bytes().any(|byte| byte <= 0x20 || byte == 0x7f)
-                    || url::Url::parse(uri).is_err()
-                {
-                    bail!("资源 URI 必须为不超过 4096 字节的绝对 URI");
-                }
+                validate_uri(uri)?;
                 let _request = RequestGuard::begin(&app, &message["id"])?;
                 let result = app
                     .connection

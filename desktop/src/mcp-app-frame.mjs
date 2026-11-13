@@ -27,8 +27,18 @@ export function mountMcpApp(root, config, resourceUrl, rpc, close) {
   let closing = false;
   let teardown;
   let ready = false;
+  const queuedNotifications = [];
   let finishTeardown;
   const send = message => frame.contentWindow?.postMessage(message, '*');
+  const notify = message => {
+    if (disposed || closing || message?.jsonrpc!=='2.0' || message.id!==undefined
+      || !['notifications/resources/updated','notifications/resources/list_changed'].includes(message.method)) return;
+    if (ready) send(message);
+    else {
+      if (queuedNotifications.length>=128) queuedNotifications.shift();
+      queuedNotifications.push(message);
+    }
+  };
   const receive = async event => {
     if (disposed || event.source !== frame.contentWindow) return;
     const message = event.data;
@@ -55,6 +65,7 @@ export function mountMcpApp(root, config, resourceUrl, rpc, close) {
       if (message.method === 'ui/notifications/initialized' && envelope.notifications?.length) {
         ready = true;
         status.textContent = 'App 已就绪';
+        for (const notification of queuedNotifications.splice(0)) send(notification);
       }
     } catch (error) {
       if (disposed || closing) return;
@@ -73,6 +84,18 @@ export function mountMcpApp(root, config, resourceUrl, rpc, close) {
   root.append(header, source, status, frame);
   return {
     frame,
+    notify,
+    async listenNotifications(poll) {
+      while (!disposed && !closing) {
+        try {
+          const result=await poll();
+          if (result.closed) return;
+          for (const message of result.notifications || []) notify(message);
+        } catch {
+          if (!disposed && !closing) await new Promise(resolve=>setTimeout(resolve,500));
+        }
+      }
+    },
     dispose() {
       if (teardown) return teardown;
       closing = true;
@@ -83,6 +106,7 @@ export function mountMcpApp(root, config, resourceUrl, rpc, close) {
           send({jsonrpc:'2.0',id:'host-teardown',method:'ui/resource-teardown',params:{}});
         });
         disposed = true;
+        queuedNotifications.length=0;
         window.removeEventListener('message', receive);
         window.removeEventListener('resize', resize);
         frame.remove();

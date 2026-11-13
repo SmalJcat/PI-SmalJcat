@@ -118,4 +118,7 @@ void (async () => {
     (message: string) => invoke('widget_command', {operation:'app-rpc',payload:{message}}),
     () => invoke('widget_command', {operation:'app-close'}));
   await listen('widget://teardown', () => { void controller.dispose(); });
+  if (config.resourceNotifications) {
+    void controller.listenNotifications(()=>invoke<Wire>('widget_command',{operation:'app-notifications'}));
+  }
 })().catch(error => { document.getElementById('root')!.textContent = String(error); });

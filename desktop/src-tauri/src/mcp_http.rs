@@ -143,6 +143,9 @@ impl HttpTransport {
                 notify(
                     serde_json::json!({"jsonrpc":"2.0","method":"notifications/tools/list_changed"}),
                 );
+                notify(
+                    serde_json::json!({"jsonrpc":"2.0","method":"notifications/resources/list_changed"}),
+                );
                 tokio::select! {
                     _ = closed.changed() => break,
                     _ = tokio::time::sleep(Duration::from_secs(delay)) => {}
@@ -251,6 +254,9 @@ impl HttpTransport {
         let headers = read_headers(&mut reader).await?;
         if headers.status == 404 && session_id.is_some() {
             self.closed.send_replace(true);
+            notify(
+                serde_json::json!({"jsonrpc":"2.0","method":"notifications/resources/list_changed"}),
+            );
             bail!("MCP HTTP 会话已过期（404），请断开后重新连接；工具调用未自动重试");
         }
         if headers.status == 405 && (method == "GET" || method == "DELETE") {
@@ -301,6 +307,9 @@ impl HttpTransport {
             // Refresh after reconnection too: changes during the gap may not be replayed.
             notify(
                 serde_json::json!({"jsonrpc":"2.0","method":"notifications/tools/list_changed"}),
+            );
+            notify(
+                serde_json::json!({"jsonrpc":"2.0","method":"notifications/resources/list_changed"}),
             );
         }
         let mut event = SseEvent::default();
