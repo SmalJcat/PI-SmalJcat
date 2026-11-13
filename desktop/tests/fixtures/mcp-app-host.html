@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><title>MCP App host contract</title></head>
+<body><div id="root"></div>
+<script type="module">
+import { mountMcpApp } from '/src/mcp-app-frame.mjs';
+window.appHost = {calls:[],allow:false,hold:false};
+const rpc = async raw => {
+  const message = JSON.parse(raw);
+  window.appHost.calls.push(message);
+  const reply = result => ({response:{jsonrpc:'2.0',id:message.id,result},notifications:[]});
+  if (message.method === 'ui/initialize') return reply({hostContext:{}});
+  if (message.method === 'ui/notifications/initialized') return {response:null,notifications:[
+    {jsonrpc:'2.0',method:'ui/notifications/tool-input',params:{arguments:{count:7}}},
+    {jsonrpc:'2.0',method:'ui/notifications/tool-result',params:{structuredContent:{count:7}}},
+  ]};
+  if (window.appHost.hold) await new Promise(resolve => { window.appHost.release=resolve; });
+  if (message.method === 'tools/call' && window.appHost.allow) return reply({structuredContent:{count:42}});
+  return {response:{jsonrpc:'2.0',id:message.id,error:{code:-32000,message:'denied'}},notifications:[]};
+};
+const url = new URL('/mcp-app-resource',location.href);
+url.hostname = 'localhost';
+window.addEventListener('message', event => {
+  if (event.source === window.appController.frame.contentWindow && event.data?.id === 'host-teardown') {
+    window.appHost.teardownAcknowledged=true;
+  }
+});
+window.appController = mountMcpApp(document.getElementById('root'),
+  {title:'App contract',server:'local fixture',uri:'ui://fixture/app'},url.href,rpc,()=>{});
+</script></body></html>

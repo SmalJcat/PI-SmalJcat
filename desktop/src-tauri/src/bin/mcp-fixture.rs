@@ -8,6 +8,11 @@ fn main() {
     let stdout = std::io::stdout();
     let mut writer = stdout.lock();
     let content_only = std::env::args().any(|arg| arg == "--content-only");
+    let apps = std::env::args().any(|arg| arg == "--apps");
+    if std::env::args().any(|arg| arg == "--diagnostic-secret") {
+        eprintln!("HOST_DIAGNOSTIC_SECRET fixture-only");
+    }
+    let mut supports_apps = false;
     let capabilities = if content_only {
         json!({"resources": {}, "prompts": {}})
     } else {
@@ -22,6 +27,16 @@ fn main() {
             continue;
         };
         let method = message["method"].as_str().unwrap_or_default().to_owned();
+        if method == "initialize" {
+            supports_apps = message["params"]["capabilities"]["extensions"]
+                ["io.modelcontextprotocol/ui"]["mimeTypes"]
+                .as_array()
+                .is_some_and(|types| {
+                    types
+                        .iter()
+                        .any(|value| value == "text/html;profile=mcp-app")
+                });
+        }
         let id = message.get("id").cloned();
         let Some(id) = id else {
             // notification：夹具只需忽略
@@ -38,6 +53,19 @@ fn main() {
                 "capabilities": capabilities,
                 "serverInfo": { "name": "mcp-fixture", "version": "1.0.0" },
             }),
+            "tools/list" if apps && supports_apps => json!({"tools":[
+                {"name":"app_view","description":"显示服务器 App","inputSchema":{"type":"object"},
+                    "_meta":{"ui":{"resourceUri":"ui://fixture/app"}}},
+                {"name":"app_refresh","description":"刷新 App 数据","inputSchema":{"type":"object"},
+                    "_meta":{"ui":{"visibility":["app"]}}},
+                {"name":"app_failure","inputSchema":{"type":"object"},"_meta":{"ui":{"visibility":["app"]}}},
+                {"name":"model_only","inputSchema":{"type":"object"},"_meta":{"ui":{"visibility":["model"]}}},
+                {"name":"echo","inputSchema":{"type":"object"}},
+                {"name":"bad_mime","inputSchema":{"type":"object"},"_meta":{"ui":{"resourceUri":"ui://fixture/bad-mime"}}},
+                {"name":"missing_app","inputSchema":{"type":"object"},"_meta":{"ui":{"resourceUri":"ui://fixture/missing"}}}
+                ,{"name":"large_schema","inputSchema":{"type":"object","properties":{"large":{"type":"string","description":"x".repeat(9000)}}},
+                    "_meta":{"ui":{"resourceUri":"ui://fixture/app"}}}
+            ]}),
             "tools/list" => json!({ "tools": [
                 { "name": "echo", "description": "回显输入文本", "inputSchema": {
                     "type": "object", "properties": { "text": { "type": "string" } }, "required": ["text"] } },
@@ -60,6 +88,13 @@ fn main() {
                 }
             }
             "resources/read" => match message["params"]["uri"].as_str().unwrap_or_default() {
+                "ui://fixture/app" if apps => json!({"contents":[{
+                    "uri":"ui://fixture/app","mimeType":"text/html;profile=mcp-app",
+                    "text":include_str!("../../../tests/fixtures/mcp-app.html"),
+                }]}),
+                "ui://fixture/bad-mime" if apps => json!({"contents":[{
+                    "uri":"ui://fixture/bad-mime","mimeType":"text/plain","text":"invalid",
+                }]}),
                 "fixture://hello" => {
                     json!({"contents":[{"uri":"fixture://hello","mimeType":"text/plain","text":"你好🙂 MCP resource"}]})
                 }
@@ -97,6 +132,12 @@ fn main() {
                 let name = message["params"]["name"].as_str().unwrap_or_default();
                 let arguments = &message["params"]["arguments"];
                 match name {
+                    "app_failure" if apps => std::process::exit(9),
+                    "app_view" | "app_refresh" if apps => json!({
+                        "content":[{"type":"text","text":"App server result"}],
+                        "structuredContent":{"count":arguments["count"].as_i64().unwrap_or(1)},
+                        "_meta":{"source":"real-stdio-fixture"},
+                    }),
                     "echo" => {
                         json!({ "content": [{ "type": "text", "text": arguments["text"].as_str().unwrap_or_default() }] })
                     }

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ChevronDown, ChevronRight, Plug, RefreshCw, Unplug, Zap } from './icons';
 import type { Wire } from './types';
 import { McpContentPanel } from './McpContentPanel';
+import { McpAppLauncher } from './McpAppLauncher';
 import {
   callTone,
   defaultArgumentsFor,
@@ -25,6 +26,7 @@ export function McpToolsPanel({ onError }: { onError: (error: unknown) => void }
   const [tool, setTool] = useState<Wire | null>(null);
   const [args, setArgs] = useState('{}');
   const [result, setResult] = useState<{ isError: boolean; text: string } | null>(null);
+  const [appResult, setAppResult] = useState<{arguments: Wire; result: Wire} | null>(null);
   const [open, setOpen] = useState<Record<string, boolean>>({});
   const [busy, setBusy] = useState('');
   const [capabilities, setCapabilities] = useState<Wire>({});
@@ -54,6 +56,7 @@ export function McpToolsPanel({ onError }: { onError: (error: unknown) => void }
       setTools([]);
       setTool(null);
       setResult(null);
+      setAppResult(null);
       setQuery('');
       setOpen(current => ({ ...current, [name]: true }));
       if (caps.tools) {
@@ -81,6 +84,7 @@ export function McpToolsPanel({ onError }: { onError: (error: unknown) => void }
         setTools([]);
         setTool(null);
         setResult(null);
+        setAppResult(null);
       }
       await refresh();
     } catch (error) {
@@ -98,9 +102,11 @@ export function McpToolsPanel({ onError }: { onError: (error: unknown) => void }
       return;
     }
     setBusy('call');
+    setAppResult(null);
     try {
       const data = await window.pi.mcpCall({ name: active, tool: tool.name, arguments: parsed.value });
       setResult(formatCallResult(data.result));
+      setAppResult({arguments:parsed.value,result:data.result});
     } catch (error) {
       onError(error);
       setResult(null);
@@ -113,6 +119,7 @@ export function McpToolsPanel({ onError }: { onError: (error: unknown) => void }
     setTool(next);
     setArgs(defaultArgumentsFor(next));
     setResult(null);
+    setAppResult(null);
   };
 
   return (
@@ -206,6 +213,7 @@ export function McpToolsPanel({ onError }: { onError: (error: unknown) => void }
                           onClick={() => selectTool(item)}
                         >
                           <strong>{item.name}</strong>
+                          {(item._meta?.ui?.resourceUri || item._meta?.['ui/resourceUri']) && <span className="update-chip">App 界面</span>}
                           {(item.required || []).length > 0 && <span className="mcp-required">必填：{item.required.join('、')}</span>}
                           {item.description && <small>{item.description}</small>}
                         </button>
@@ -242,6 +250,10 @@ export function McpToolsPanel({ onError }: { onError: (error: unknown) => void }
                       </div>
                       {result && (
                         <pre className={`mcp-result ${callTone(result) === 'error' ? 'error' : ''}`}>{result.text}</pre>
+                      )}
+                      {appResult && (tool._meta?.ui?.resourceUri || tool._meta?.['ui/resourceUri']) && (
+                        <McpAppLauncher key={active + ':' + tool.name} name={active} tool={tool}
+                          arguments={appResult.arguments} result={appResult.result} onError={onError} />
                       )}
                     </div>
                   )}

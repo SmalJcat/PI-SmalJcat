@@ -1,12 +1,14 @@
 // 沙箱 widget 页面：独立 WebView 窗口，只加载这一个页面。
 // 它没有任何宿主持有能力：所有调用都必须经过 widget-invoke，由 Rust 侧按授权集合判定。
-import { invoke } from '@tauri-apps/api/core';
+import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { mountMcpApp } from '../mcp-app-frame.mjs';
 
 type Wire = Record<string, any>;
 
 // 身份由宿主按窗口标签下发，页面不依赖查询参数，也就无法自报成别的 widget。
-let widgetId = 'unknown';
+function startDemo(identity: Wire) {
+let widgetId = String(identity.widget || 'unknown');
 let sequence = 0;
 const nextId = () => `c${Date.now().toString(36)}-${++sequence}`;
 
@@ -65,7 +67,7 @@ const append = (text: string, error = false) => {
 async function send(api: string, payload: Wire = {}) {
   const message = { pi: 1, id: nextId(), api, payload };
   try {
-    const verdict: Wire = await invoke('widget-invoke', { widget: widgetId, message: JSON.stringify(message) });
+    const verdict: Wire = await invoke('widget_command', { operation: 'invoke', payload: { message: JSON.stringify(message) } });
     if (verdict.ok) append(`✓ ${api} → ${JSON.stringify(verdict.result)}`);
     else append(`✗ ${api} → ${verdict.error}`, true);
   } catch (error) {
@@ -95,11 +97,25 @@ void listen<Wire>('widget://render', event => {
   append('← 收到宿主下发数据');
 });
 
-void invoke<Wire>('widget-identity')
-  .then(identity => {
-    widgetId = String(identity.widget || 'unknown');
-    widgetBadge.textContent = widgetId;
-    const allowed: string[] = Array.isArray(identity.allowed) ? identity.allowed : [];
-    append(`已登记为 ${widgetId}，已授权 ${allowed.length} 项${allowed.length ? '：' + allowed.join('、') : '（默认拒绝）'}`);
-  })
-  .catch(error => append('登记失败：' + String(error), true));
+widgetBadge.textContent = widgetId;
+const allowed: string[] = Array.isArray(identity.allowed) ? identity.allowed : [];
+append('已登记为 ' + widgetId + '，已授权 ' + allowed.length + ' 项');
+}
+
+void (async () => {
+  let config: Wire;
+  try {
+    config = await invoke<Wire>('widget_command', {operation:'app-bootstrap'});
+  } catch {
+    const identity = await invoke<Wire>('widget_command', {operation:'identity'});
+    startDemo(identity);
+    return;
+  }
+  document.documentElement.style.colorScheme = 'dark';
+  document.body.style.cssText = 'margin:0;font:13px system-ui;background:Canvas;color:CanvasText';
+  const controller = mountMcpApp(document.getElementById('root')!, config,
+    convertFileSrc(config.id, 'mcp-app'),
+    (message: string) => invoke('widget_command', {operation:'app-rpc',payload:{message}}),
+    () => invoke('widget_command', {operation:'app-close'}));
+  await listen('widget://teardown', () => { void controller.dispose(); });
+})().catch(error => { document.getElementById('root')!.textContent = String(error); });

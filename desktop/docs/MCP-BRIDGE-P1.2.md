@@ -99,4 +99,4 @@ node scripts/native.mjs cargo test --manifest-path src-tauri/Cargo.toml --no-def
 - GET 的事件重放由服务器决定。客户端不重放断开的 POST/工具调用；不支持服务端发起的 sampling/elicitation 等请求、OAuth 或传统 HTTP+SSE 双端点。
 - 资源/提示词目录按用户刷新读取；未实现 resources/subscribe、参数 completion 或自动更新已展开目录。
 - 连接由桌面进程托管，不向 Pi 注入工具；要让 Pi 用上这些工具仍走 Pi 自己的 MCP 配置。
-- MCP Apps 宿主已具备独立 WebView 与授权检查，但资源仍为 fixture；真实资源接入属于后续工作。
+- MCP Apps 的早期 fixture 演示继续提供回归覆盖，开发分支新增服务器资源与实际工具调用宿主。[宿主契约](MCP-APPS-HOST.md)

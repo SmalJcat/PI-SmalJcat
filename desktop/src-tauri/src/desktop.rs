@@ -1,6 +1,7 @@
 use crate::{
     core::{ConnectOptions, Core},
     index_store::IndexStore,
+    mcp_app_host::McpAppHost,
     mcp_apps::WidgetHost,
     mcp_client::McpManager,
     terminal::Terminal,
@@ -51,6 +52,7 @@ pub struct Services {
     pub update: Arc<UpdateManager>,
     pub mcp: Arc<McpManager>,
     pub widgets: Arc<WidgetHost>,
+    pub apps: Arc<McpAppHost>,
     pub review: Arc<ReviewWindows>,
     pub terminal: Arc<Terminal>,
     pub index: Arc<IndexStore>,
@@ -115,6 +117,10 @@ async fn pi_command(
     payload: Option<Value>,
 ) -> std::result::Result<Value, String> {
     if window.label() != "main" {
+        state
+            .services
+            .apps
+            .denied_native_command(window.label(), &operation);
         return Err("无效客户端".into());
     }
     dispatch(
@@ -126,6 +132,53 @@ async fn pi_command(
     .await
     .map_err(|error| format!("{error:#}"))
 }
+
+#[tauri::command]
+async fn widget_command(
+    window: WebviewWindow,
+    state: State<'_, DesktopState>,
+    operation: String,
+    payload: Option<Value>,
+) -> std::result::Result<Value, String> {
+    let payload = payload.unwrap_or_else(|| json!({}));
+    let services = &state.services;
+    let result: Result<Value> = match operation.as_str() {
+        "app-bootstrap" => services.apps.bootstrap(window.label()),
+        "app-close" => match services.apps.bootstrap(window.label()) {
+            Ok(identity) => {
+                services.apps.close(identity["id"].as_str().unwrap());
+                window
+                    .close()
+                    .map(|_| json!({"closed":true}))
+                    .map_err(Into::into)
+            }
+            Err(error) => Err(error),
+        },
+        "app-rpc" => match payload["message"].as_str() {
+            Some(raw) => {
+                // Validate the registered native window before processing any message.
+                match services.apps.bootstrap(window.label()) {
+                    Ok(_) => Ok(services.apps.message(window.label(), raw).await),
+                    Err(error) => Err(error),
+                }
+            }
+            None => Err(anyhow::anyhow!("缺少 App 消息")),
+        },
+        "identity" | "invoke" => match services.widgets.widget_for_label(window.label()) {
+            Some(widget) if operation == "identity" => {
+                Ok(json!({"widget":widget,"allowed":services.widgets.allowed(&widget)}))
+            }
+            Some(widget) => match payload["message"].as_str() {
+                Some(raw) => Ok(services.widgets.dispatch(&widget, raw)),
+                None => Err(anyhow::anyhow!("缺少 widget 消息")),
+            },
+            None => Err(anyhow::anyhow!("无效 widget 窗口")),
+        },
+        _ => Err(anyhow::anyhow!("无效 widget 命令")),
+    };
+    result.map_err(|error| format!("{error:#}"))
+}
+
 async fn dispatch(
     window: WebviewWindow,
     services: Services,
@@ -137,6 +190,7 @@ async fn dispatch(
         update,
         mcp,
         widgets,
+        apps,
         review,
         terminal,
         index,
@@ -492,6 +546,83 @@ async fn dispatch(
         "mcp-disconnect" => Ok(mcp
             .disconnect(payload["name"].as_str().unwrap_or("*"))
             .await),
+        "mcp-app-prepare" => {
+            apps.prepare(
+                &mcp,
+                payload["name"].as_str().context("缺少服务器名")?,
+                payload["tool"].as_str().context("缺少工具名")?,
+            )
+            .await
+        }
+        "mcp-app-open" => {
+            let id = payload["id"].as_str().context("缺少 App 会话")?.to_owned();
+            let grants: Vec<String> = serde_json::from_value(payload["grantedTools"].clone())
+                .context("App 工具授权格式无效")?;
+            let label = apps.activate(
+                &id,
+                &grants,
+                payload["arguments"].clone(),
+                payload["result"].clone(),
+            )?;
+            let identity = apps.bootstrap(&label)?;
+            let title = format!(
+                "MCP App · {} · {}",
+                identity["server"].as_str().unwrap_or_default(),
+                identity["title"].as_str().unwrap_or_default()
+            );
+            let data_dir = std::env::var_os("PI_DESKTOP_USER_DATA")
+                .map(PathBuf::from)
+                .unwrap_or(app.path().app_data_dir()?);
+            let opened = tauri::WebviewWindowBuilder::new(
+                &app,
+                &label,
+                WebviewUrl::App("widget-sandbox.html".into()),
+            )
+            .title(
+                title
+                    .chars()
+                    .filter(|ch| !ch.is_control())
+                    .take(180)
+                    .collect::<String>(),
+            )
+            .inner_size(760.0, 660.0)
+            .min_inner_size(380.0, 420.0)
+            .data_directory(data_dir.join("widgets").join(&label))
+            .on_navigation(|url| {
+                url.scheme() == "mcp-app"
+                    || matches!(
+                        url.host_str(),
+                        Some("mcp-app.localhost" | "tauri.localhost")
+                    )
+                    || cfg!(debug_assertions)
+                        && url.host_str() == Some("127.0.0.1")
+                        && url.port() == Some(5178)
+            })
+            .build();
+            match opened {
+                Ok(window) => {
+                    if apps.bootstrap(&label).is_err() {
+                        let _ = window.destroy();
+                        bail!("App 打开操作已取消");
+                    }
+                    let _ = window.set_focus();
+                    Ok(json!({"id":id,"label":label}))
+                }
+                Err(error) => {
+                    apps.close(&id);
+                    Err(error.into())
+                }
+            }
+        }
+        "mcp-app-close" => {
+            let id = payload["id"].as_str().context("缺少 App 会话")?;
+            let label = format!("widget-app-{id}");
+            apps.close(id);
+            if let Some(window) = app.get_webview_window(&label) {
+                let _ = window.close();
+            }
+            Ok(json!({"closed":true}))
+        }
         // 工作树（路线图 P3.2 收尾）：列出/清理可写子代理留下的隔离工作树。
         "worktree-list" => {
             let cwd = core.current().await?.cwd;
@@ -979,9 +1110,18 @@ async fn dispatch(
                 payload["message"].as_str().context("缺少消息内容")?,
             ))
         }
-        "widget-audit" => Ok(json!({
-            "entries": widgets.audit(payload["limit"].as_u64().unwrap_or(50) as usize),
-        })),
+        "widget-audit" => {
+            let mut entries = apps.audit();
+            entries.extend(
+                widgets
+                    .audit(200)
+                    .iter()
+                    .map(|entry| serde_json::to_value(entry).unwrap()),
+            );
+            entries.sort_by_key(|entry| std::cmp::Reverse(entry["atMs"].as_u64().unwrap_or(0)));
+            entries.truncate(payload["limit"].as_u64().unwrap_or(50).clamp(1, 200) as usize);
+            Ok(json!({"entries":entries}))
+        }
         "widget-close" => {
             let widget = payload["widget"].as_str().context("缺少 widget 标识")?;
             let label = crate::mcp_apps::window_label(widget);
@@ -1055,11 +1195,38 @@ pub fn run() {
         }))
     };
     builder
+        .register_uri_scheme_protocol("mcp-app", |context, request| {
+            let state = context.app_handle().state::<DesktopState>();
+            let id = request.uri().path().trim_start_matches('/');
+            let document = if request.method() == "GET" && request.uri().query().is_none() {
+                state.services.apps.document(context.webview_label(), id)
+            } else {
+                Err(anyhow::anyhow!("无效资源请求"))
+            };
+            match document {
+                Ok((html, csp)) => tauri::http::Response::builder()
+                    .header("Content-Type", "text/html; charset=utf-8")
+                    .header("Content-Security-Policy", csp)
+                    .header("Cache-Control", "no-store")
+                    .header("X-Content-Type-Options", "nosniff")
+                    .body(html.into_bytes())
+                    .unwrap(),
+                Err(_) => tauri::http::Response::builder()
+                    .status(403)
+                    .body(b"App resource unavailable".to_vec())
+                    .unwrap(),
+            }
+        })
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .manage(SystemFlags::default())
         .setup(|app| {
+            // The frontend uses no JS path API. WebView2 injects its bootstrap
+            // into unprivileged subframes, where TAURI_INTERNALS is unavailable.
+            // Native path resolution uses the already managed PathResolver.
+            #[cfg(windows)]
+            app.handle().remove_plugin("path");
             let data_dir = std::env::var_os("PI_DESKTOP_USER_DATA")
                 .map(PathBuf::from)
                 .unwrap_or(app.path().app_data_dir()?);
@@ -1084,6 +1251,7 @@ pub fn run() {
                     mcp,
                     widgets: Arc::new(WidgetHost::new()),
                     review: Arc::new(ReviewWindows::default()),
+                    apps: Arc::new(McpAppHost::default()),
                     terminal: Arc::new(Terminal::new()),
                     index: Arc::new(IndexStore::open(&data_dir.join("index.sqlite"))?),
                     session_index: Arc::new(crate::session_index::SessionIndex::open(
@@ -1217,8 +1385,38 @@ pub fn run() {
             window.set_focus()?;
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![pi_subscribe, pi_command])
+        .invoke_handler(tauri::generate_handler![
+            pi_subscribe,
+            pi_command,
+            widget_command
+        ])
         .on_window_event(|window, event| {
+            if window.label().starts_with("widget-") {
+                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                    if window.label().starts_with("widget-app-") {
+                        api.prevent_close();
+                        window
+                            .state::<DesktopState>()
+                            .services
+                            .apps
+                            .close_window(window.label());
+                        let _ = window.emit("widget://teardown", json!({}));
+                        let closing = window.clone();
+                        tauri::async_runtime::spawn(async move {
+                            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                            let _ = closing.destroy();
+                        });
+                    }
+                }
+                if matches!(event, tauri::WindowEvent::Destroyed) {
+                    let state = window.state::<DesktopState>();
+                    state.services.apps.close_window(window.label());
+                    if let Some(widget) = state.services.widgets.widget_for_label(window.label()) {
+                        state.services.widgets.close(&widget);
+                    }
+                }
+                return;
+            }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 let state = window.state::<DesktopState>();
                 if state.services.core.closing.load(Ordering::SeqCst) {

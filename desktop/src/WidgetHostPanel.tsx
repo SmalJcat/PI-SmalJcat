@@ -90,6 +90,7 @@ export function WidgetHostPanel({ onError }: { onError: (error: unknown) => void
         <span className={`update-chip ${opened ? 'ok' : 'idle'}`}>{opened ? '窗口已打开' : '未打开'}</span>
       </div>
       <p className="setting-help">内置演示 · 模拟能力</p>
+      <p className="setting-help">服务器提供的 App 可在“MCP 连接 → 桌面调试”调用带界面的工具后打开。</p>
       <div className="settings-actions update-actions">
         <button className="secondary-button" disabled={busy} onClick={() => void loadAudit()}>
           <RefreshCw size={14} /> 刷新审计

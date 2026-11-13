@@ -1,5 +1,20 @@
 # Pi Desktop 发布验收
 
+## 0.7.1 服务器 MCP Apps 宿主交付（2026-11-13）
+
+- 分支 codex/mcp-apps-host 按稳定版 2026-01-26 MCP Apps 接入，先发布 IPC 契约，再实现资源宿主、窗口与实际工具代理。[PR #4](https://github.com/SmalJcat/PI-SmalJcat/pull/4)
+- 保留工具关联元数据，初始化声明 UI 扩展能力，按关联 URI 读取 text/html;profile=mcp-app 的 text/blob。独立 WebView 的沙箱 iframe 仅启用脚本，资源由校验窗口标签及会话 ID 的协议提供，CSP 来源经过类型、来源和控制字符校验及国际域名规范化。
+- 工具逐项授权默认空，代理绑定原 MCP 连接并重新核对 App 可见性，关闭时撤销未提交请求的许可。stdio 写入与响应共享请求期限，部分写入超时关闭连接，断开可中断阻塞写入。工具传输的底层诊断链留在宿主审计，App 获得安全错误。
+- JS 124 项、生产构建、侧栏 18 类、MCP 内容浏览器 4 类及 App 浏览器 4 类通过。普通 Rust 172 项、fixture Rust 174 项通过，各有 4 项真实环境检查默认忽略。格式检查与全目标严格 Clippy 通过。本机 HTTP 回环测试使用本轮进程的 NO_PROXY。
+- 11:41 HKT，真实 Tauri/WebView2 + Pi/ACP/MCP fixture 71 项通过，渲染错误 0、模型请求 0。新增覆盖服务器 HTML、初始化输入/结果顺序、授权前后实际调用、iframe 来源与主窗 IPC 隔离、断线/关闭/审计，以及旧演示原生 IPC。debug 程序 SHA-256 为 52f4c31c4c97d9e87187090c2d8f1e7476ee6f285d08db73b251f6cb2e31a1a9。
+- 原生调试按各隔离 WebView 的 DevToolsActivePort 连接动态端口。Windows 移除前端未使用的 JS path 插件以修复其子框架初始化异常，Rust 路径解析及原有文件/会话界面已随完整原生回归验证。独立只读复核未发现遗留的可重现代码问题。
+- 证据为 artifacts/mcp-apps-verified-checks.json、mcp-apps-verified-*.log、mcp-apps-host-final.log、mcp-apps/result.json 及 tauri-ui-result.json，界面截图为 mcp-app-grants.png、mcp-app-window.png、mcp-app-rejections.png。写入超时与诊断泄漏的修复前失败回归分别保留为 mcp-apps-write-timeout-before.log、mcp-apps-diagnostics-before.log。测试使用隔离 stdio/loopback HTTP 服务。
+- 当前入口在桌面 MCP 调试区，支持握手、工具输入/结果、授权后的同连接工具调用、日志及固定窗口显示模式。第三方远端 App/TLS/代理、聊天自动挂载、资源读取代理及消息/上下文协作的验证与扩展列入后续工作。[宿主契约](docs/MCP-APPS-HOST.md)
+- 11:51 HKT，从干净提交 `936bd299633efab99d5c0a40f3e9f2ab6139a177` 构建并暂存 0.7.1 正式程序，18,158,080 字节，SHA-256 为 `a711bdb2095ad11cc28ba4348b60eaf8ae8c01f12efdd348c16e8985143cb9fb`。146 个文件的源码指纹为 `89ca0507df3d935466127846679ebbade0b51f4e89c469d8d3d7bb514da5c29d`，构建期间输入与提交一致。
+- 11:51–11:52 HKT，正式程序先完成真实 Pi 5 项检查，再完成含官方 ACP 的 6 项检查，渲染错误 0、模型请求 0。另以 `npm run test:release -- -AppsOnly` 完成正式程序 App 专项 6 项检查，使用真实 Pi 及临时 agent/mcp.json 中的本地 stdio 服务，覆盖服务器 HTML、授权前后调用、隔离/拒绝、断线、关闭、旧演示及正常退出。全部回执程序哈希与暂存包相同。
+- 11:53 HKT，通过既有部署工具更新 `%LOCALAPPDATA%\Programs\Pi Desktop\fdea6c4`，旧版保留为 `fdea6c4.backup-2026-11-13T03-53-18-136Z-042661d0`。安装与暂存程序的清单、大小、哈希及当前源码指纹已核对一致。交付后补充的 JS 验收入口与文档在源码指纹排除范围内。
+- 正式证据为 `artifacts/package-source.json`、`mcp-apps-package.log`、`mcp-apps-release-result.json`、`mcp-apps-release-acp-result.json`、`mcp-apps-release-apps-result.json`、`mcp-apps-deploy.log` 及 `mcp-apps-release-integrity.json`。`mcp-app-window.png` 为正式程序中已授权工具返回 count 42 的截图。远端第三方 App、TLS/OAuth 及网络域实际加载仍待实测。
+
 ## 0.7.1 MCP 内容、编辑重发与 Fast 正式交付（2026-11-12，11 月 13 日补记）
 
 - 正式包包含 `2056780` 的 MCP resources/prompts 与 CI 增量，以及 `e29c52f` 的编辑重发预检与 Fast。后者对应的远端 Windows Actions 已通过。[Windows Actions](https://github.com/SmalJcat/PI-SmalJcat/actions/runs/43164982056)

@@ -1,6 +1,6 @@
 # Pi Desktop 开发记录
 
-更新时间：2026-11-13（Asia/Hong_Kong）。当前版本为 0.7.1，resources/prompts、编辑重发与 Fast 已于 11 月 12 日完成正式包验收并部署。
+更新时间为 2026-11-13（Asia/Hong_Kong）。当前版本为 0.7.1，resources/prompts、编辑重发与 Fast 已于 11 月 12 日交付。真实 MCP Apps 宿主已于 11 月 13 日从干净提交 `936bd29` 构建，完成正式包 Pi/ACP 和 App 全链路验收，并更新本机安装目录。详细交付证据见验收记录及发布清单。
 
 ## 目录与事实来源
 
@@ -24,8 +24,8 @@
 ## 部分完成与边界
 
 - 扩展：只做 manifest / 签名 / 权限信息检查；不是插件安装或加载系统，不能阻止 Pi 自身加载未签名扩展。
-- MCP：桌面可连接 stdio / HTTP 服务并发现、调用工具；HTTP 复用会话 ID、发送初始化通知、读取 JSON/SSE 响应并维护 GET 通知流，工具列表变更使缓存失效。开发分支新增 resources/templates/prompts 分页浏览、资源读取和提示词获取，详见 [内容接口](MCP-CONTENT.md)。
-- MCP Apps：独立 WebView、授权校验和审计已实现；资源仍来自 `fixture_catalog`，能力返回 `mock_result`，不是完整第三方 App 宿主。
+- MCP：桌面可连接 stdio / HTTP 服务并发现、调用工具；HTTP 复用会话 ID、发送初始化通知、读取 JSON/SSE 响应并维护 GET 通知流，工具列表变更使缓存失效。支持 resources/templates/prompts 分页浏览、资源读取和提示词获取，详见 [内容接口](MCP-CONTENT.md)。
+- MCP Apps：已接入服务器工具关联的 HTML 资源、独立 WebView 内沙箱 iframe、资源 CSP、逐项工具授权、初始化输入/结果及同连接工具调用。旧内置演示保留回归覆盖。聊天自动挂载、App 资源读取代理及消息/上下文协作仍待后续实现。[宿主契约](MCP-APPS-HOST.md)
 - 命令运行器不支持交互式 PTY；没有浏览器自动化、WebMCP 和 Office/LaTeX 工件系统。
 - 角色工具白名单与 worktree 不是 OS 沙箱。`verifier` 能执行 shell，不能把界面“不可修改文件”理解为操作系统强制只读。
 - 安装器尚未实际安装验收；远端更新未端到端验证；没有 Authenticode 签名、跨平台发布或完整可访问性验收。
@@ -170,7 +170,7 @@
 
 ## 后续优先级
 
-1. 在资源读取基础上接入真实 MCP Apps 资源与授权调用，替换演示 catalog/result；补真实远程 MCP 的 TLS/代理兼容验证。
+1. 扩展 MCP Apps 的资源读取与聊天协作，补第三方 App 和真实远程 MCP 的 TLS/代理兼容验证。
 2. 插件安装/启停与加载前校验，明确与 Pi 原生扩展机制的责任边界。
 3. 交互式 PTY；加强可写/执行型代理的边界、工作树生命周期与审阅合并体验。
 4. 安装器和远端更新端到端验收；面向公开分发时再补代码签名。

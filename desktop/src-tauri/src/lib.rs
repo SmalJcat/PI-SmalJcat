@@ -10,6 +10,7 @@ pub mod diagnostics;
 pub mod extensions;
 pub mod index_store;
 pub mod mcp;
+pub mod mcp_app_host;
 pub mod mcp_apps;
 pub mod mcp_client;
 mod mcp_http;

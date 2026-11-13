@@ -1,4 +1,5 @@
 import { mcpContentChecks } from './mcp-content-ui.mjs';
+import { mcpAppsChecks } from './mcp-apps-ui.mjs';
 import {composerStatusChecks} from './composer-status-ui.mjs';
 import { piMessageChecks } from './message-actions-ui.mjs';
 import { antigravityChecks, officialAntigravityChecks } from './antigravity-ui.mjs';
@@ -18,12 +19,14 @@ import os from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { debugEndpoint, waitForProcessExit, holdSessionLease } from './tauri-harness.mjs';
+import { debugEndpoint, webviewDebugEndpoint, waitForProcessExit, holdSessionLease } from './tauri-harness.mjs';
 import { verifyComposer } from './composer-ui.mjs';
 const root = path.resolve(import.meta.dirname, '..');
 const { version } = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
 const release = process.argv.includes('--release');
 const real = process.argv.includes('--real') || release;
+const appsOnly = process.argv.includes('--apps-only');
+const fixtureMcp = !real || appsOnly;
 const mode = release ? 'release' : real ? 'real' : 'ui';
 const temp = await mkdtemp(path.join(os.tmpdir(), 'pi-tauri-ui-'));
 const work = real ? root : path.join(temp, '示例项目');
@@ -35,12 +38,17 @@ const resultFile = path.join(artifacts, `tauri-${mode}-result.json`);
 await writeFile(resultFile, JSON.stringify({ success: false, mode, version, startedAt: new Date().toISOString() }, null, 2) + '\n');
 if (!real) {
   await mkdir(work); await mkdir(path.join(work, 'src'));
+}
+if (fixtureMcp) {
   await mkdir(path.join(temp, 'agent'), { recursive: true });
   const mcpFixture = path.join(root, 'src-tauri/target/debug/mcp-fixture.exe');
   await writeFile(path.join(temp, 'agent/mcp.json'), JSON.stringify({ mcpServers: {
     content: { command: mcpFixture, args: ['--content-only'] },
     'tool-server': { command: mcpFixture },
+    'app-server': { command: mcpFixture, args: ['--apps'] },
   } }));
+}
+if (!real) {
   await writeFile(path.join(work, 'README.md'), '# Pi Desktop 测试项目\n\n这是文件预览内容。');
   await writeFile(path.join(work, 'src/main.ts'), 'export const ready = true;\n');
   await exec('git',['init'],{cwd:work});await exec('git',['add','.'],{cwd:work});
@@ -49,9 +57,11 @@ if (!real) {
   await writeFile(path.join(work,'src/main.ts'),'export const ready = "working";\n');
 }
 const debug = await debugEndpoint();
+if (fixtureMcp) debug.args = '--remote-debugging-port=0 --remote-debugging-address=127.0.0.1';
 const env = { ...process.env, PI_DESKTOP_USER_DATA: path.join(temp,'profile'), PI_DESKTOP_WORKSPACE: work, WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: debug.args };
 delete env.PI_DESKTOP_DEBUG_PORT;
-if (!real) { env.PI_DESKTOP_TEST = '1'; env.PI_CODING_AGENT_DIR = path.join(temp, 'agent'); } else { delete env.PI_DESKTOP_TEST; }
+if (fixtureMcp) env.PI_CODING_AGENT_DIR = path.join(temp, 'agent');
+if (!real) { env.PI_DESKTOP_TEST = '1'; } else { delete env.PI_DESKTOP_TEST; }
 delete env.ELECTRON_RUN_AS_NODE;
 // WebView2 enables CDP only for this verification process, using a free port.
 const executable = path.join(root, release ? 'release/tauri/Pi Desktop.exe' : 'src-tauri/target/debug/pi-desktop.exe');
@@ -67,6 +77,7 @@ async function waitForValue(read, predicate, timeout = 25000) { const deadline=D
 const waitForTasks = predicate => waitForValue(() => page.evaluate(() => window.pi.agentTasks()), predicate);
 try {
   const deadline = Date.now() + 30000;
+  if (fixtureMcp) debug.url = await webviewDebugEndpoint(path.join(temp,'profile/webview'));
   while (Date.now() < deadline) {
     if (child.exitCode !== null) throw new Error(`Tauri exited: ${child.exitCode}\n${stderr}`);
     try { browser = await chromium.connectOverCDP(debug.url, { timeout: 1000 }); break; } catch { await delay(250); }
@@ -84,7 +95,7 @@ try {
   checks.push('真实 Tauri / WebView2 启动、Rust 桥接与连接');
   if (!real) await layoutChecks(page, artifacts, checks);
   await page.screenshot({ path: path.join(artifacts, real ? 'tauri-real.png' : 'tauri-home-test.png') });
-  if (real) {
+  if (real && !appsOnly) {
     assert.ok(info.snapshot.models.length > 0); assert.ok(info.snapshot.commands.length > 0);
     const mcp=await page.evaluate(()=>window.pi.mcpStatus());
     assert.ok(Array.isArray(mcp.servers));
@@ -98,6 +109,9 @@ try {
     console.log(JSON.stringify({mcpServers:mcp.servers.map(server=>({name:server.name,state:server.state,tools:server.tools}))}));
     console.log(JSON.stringify({ realPi: true, runtime: info.bootstrap.runtime, modelCount: info.snapshot.models.length, commandCount: info.snapshot.commands.length, workspace: info.snapshot.cwd, nodeIntegration: false }, null, 2));
     if (process.argv.includes('--antigravity')) details.antigravity = await officialAntigravityChecks(page, artifacts, checks, waitForValue, waitForProcessExit);
+  } else if (appsOnly) {
+    details = { realPi: real, mcpFixture: true };
+    await mcpAppsChecks(page, path.join(temp,'profile'), artifacts, checks, errors);
   } else {
     await page.getByRole('button', { name: 'README.md', exact: true }).click();
     await page.getByRole('dialog').locator('.numbered-code').getByText('这是文件预览内容。', { exact: false }).waitFor();
@@ -353,6 +367,7 @@ try {
     await page.screenshot({path:path.join(artifacts,'v03-mcp.png')});await page.keyboard.press('Escape');
     checks.push('MCP状态、错误详情与会话内重连');
     await mcpContentChecks(page, artifacts, checks);
+    await mcpAppsChecks(page, path.join(temp,'profile'), artifacts, checks, errors);
     await editor.fill('检查 @src/ma');
     await page.getByRole('listbox',{name:'文件引用'}).waitFor();await editor.press('Enter');
     await page.getByRole('button',{name:'移除引用 src/main.ts',exact:true}).waitFor();
@@ -500,7 +515,8 @@ try {
     child = spawn(executable, [], { cwd: root, env, windowsHide: false, stdio: ['ignore', 'pipe', 'pipe'] });
     child.stderr.on('data', bytes => { stderr = (stderr + bytes.toString()).slice(-10000); }); child.stdout.on('data', () => {});
     const restartDeadline = Date.now() + 30000;
-    while (Date.now() < restartDeadline) { try { browser = await chromium.connectOverCDP(debug.url, { timeout: 1000 }); break; } catch { await delay(200); } }
+    debug.url = await webviewDebugEndpoint(path.join(temp,'profile/webview'));
+    while (Date.now() < restartDeadline) { try { debug.url = await webviewDebugEndpoint(path.join(temp,'profile/webview')); browser = await chromium.connectOverCDP(debug.url, { timeout: 1000 }); break; } catch { await delay(200); } }
     assert.ok(browser, 'WebView2 did not restart'); page = browser.contexts()[0].pages()[0]; page.on('pageerror', error => errors.push(error.message));
     await page.locator('.connection-pill.ready').waitFor({ timeout: 45000 });
     assert.equal((await page.evaluate(id => window.pi.agentTasks({ action: 'detail', id }), interrupted.id)).status, 'interrupted');

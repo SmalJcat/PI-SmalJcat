@@ -18,7 +18,7 @@ use std::{
     path::{Path, PathBuf},
     process::Stdio,
     sync::{
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex,
     },
     time::Duration,
@@ -284,6 +284,7 @@ pub struct McpSession {
     handshake: Mutex<(Value, String)>,
     tools: AsyncMutex<(u64, Vec<Value>)>,
     tools_revision: Arc<AtomicU64>,
+    closed: AtomicBool,
     http: Option<Arc<HttpTransport>>,
     child: AsyncMutex<Option<Child>>,
     stdin: AsyncMutex<Option<ChildStdin>>,
@@ -344,6 +345,7 @@ impl McpSession {
             handshake: Mutex::new((Value::Null, PROTOCOL_VERSION.to_owned())),
             tools: AsyncMutex::new((u64::MAX, Vec::new())),
             tools_revision: Arc::new(AtomicU64::new(0)),
+            closed: AtomicBool::new(false),
             http: None,
             child: AsyncMutex::new(Some(child)),
             stdin: AsyncMutex::new(Some(stdin)),
@@ -409,6 +411,8 @@ impl McpSession {
                     }
                 }
             }
+            dispatch_session.closed.store(true, Ordering::SeqCst);
+            dispatch_session.pending.lock().unwrap().clear();
         });
 
         let response = session
@@ -416,7 +420,7 @@ impl McpSession {
                 "initialize",
                 json!({
                     "protocolVersion": PROTOCOL_VERSION,
-                    "capabilities": {},
+                    "capabilities": crate::mcp_app_host::client_capabilities(),
                     "clientInfo": { "name": "pi-desktop", "version": env!("CARGO_PKG_VERSION") },
                 }),
                 Duration::from_secs(HANDSHAKE_TIMEOUT_SECS),
@@ -467,6 +471,7 @@ impl McpSession {
             handshake: Mutex::new((Value::Null, PROTOCOL_VERSION.to_owned())),
             tools: AsyncMutex::new((u64::MAX, Vec::new())),
             tools_revision: Arc::new(AtomicU64::new(0)),
+            closed: AtomicBool::new(false),
             http: Some(http.clone()),
             child: AsyncMutex::new(None),
             stdin: AsyncMutex::new(None),
@@ -481,7 +486,7 @@ impl McpSession {
                 "initialize",
                 json!({
                     "protocolVersion": PROTOCOL_VERSION,
-                    "capabilities": {},
+                    "capabilities": crate::mcp_app_host::client_capabilities(),
                     "clientInfo": { "name": "pi-desktop", "version": env!("CARGO_PKG_VERSION") },
                 }),
                 Duration::from_secs(HANDSHAKE_TIMEOUT_SECS),
@@ -517,8 +522,9 @@ impl McpSession {
         })
     }
 
-    fn connected(&self) -> bool {
-        self.http.as_ref().is_none_or(|http| http.connected())
+    pub(crate) fn connected(&self) -> bool {
+        !self.closed.load(Ordering::SeqCst)
+            && self.http.as_ref().is_none_or(|http| http.connected())
     }
 
     fn take_id(&self) -> u64 {
@@ -527,11 +533,24 @@ impl McpSession {
 
     /// 发送请求并等待对应 id 的响应。
     pub async fn request(&self, method: &str, params: Value, timeout: Duration) -> Result<Value> {
+        self.request_guarded(method, params, timeout, None).await
+    }
+
+    async fn request_guarded(
+        &self,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+        permit: Option<&AtomicBool>,
+    ) -> Result<Value> {
+        if !self.connected() {
+            bail!("MCP 连接已断开");
+        }
         let id = self.take_id();
         let payload = json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params });
         if let Some(http) = &self.http {
             let message = http
-                .post(&payload, timeout, &self.notification_handler())
+                .post_guarded(&payload, timeout, &self.notification_handler(), permit)
                 .await?;
             if let Some(error) = message.get("error") {
                 bail!("{}：{}", method, truncate(&error.to_string(), 400));
@@ -539,13 +558,21 @@ impl McpSession {
             return Ok(message["result"].clone());
         }
         let (tx, rx) = oneshot::channel();
+        let deadline = tokio::time::Instant::now() + timeout;
         self.pending.lock().unwrap().insert(id, tx);
-        let sent = self.write_stdio(&payload).await;
-        if let Err(error) = sent {
-            self.pending.lock().unwrap().remove(&id);
-            return Err(error);
+        match tokio::time::timeout_at(deadline, self.write_stdio_guarded(&payload, permit)).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                self.pending.lock().unwrap().remove(&id);
+                return Err(error);
+            }
+            Err(_) => {
+                // A partial JSONL write cannot be reused by a later request.
+                self.shutdown().await;
+                bail!("{method} 写入超时，MCP 连接已关闭");
+            }
         }
-        match tokio::time::timeout(timeout, rx).await {
+        match tokio::time::timeout_at(deadline, rx).await {
             Ok(Ok(message)) => {
                 if let Some(error) = message.get("error") {
                     bail!("{}：{}", method, truncate(&error.to_string(), 400));
@@ -565,10 +592,26 @@ impl McpSession {
     }
 
     async fn write_stdio(&self, payload: &Value) -> Result<()> {
+        self.write_stdio_guarded(payload, None).await
+    }
+
+    async fn write_stdio_guarded(
+        &self,
+        payload: &Value,
+        permit: Option<&AtomicBool>,
+    ) -> Result<()> {
         let mut guard = self.stdin.lock().await;
+        if !self.connected() {
+            bail!("MCP 连接已断开");
+        }
         let stdin = guard.as_mut().context("连接已关闭")?;
         let mut line = serde_json::to_vec(payload)?;
         line.push(b'\n');
+        // Commit under the writer lock. Revoked queued calls never reach stdin;
+        // an already committed write must finish to preserve JSONL framing.
+        if permit.is_some_and(|permit| !permit.load(Ordering::SeqCst)) {
+            bail!("App 已关闭");
+        }
         stdin.write_all(&line).await.context("写入子进程失败")?;
         stdin.flush().await.context("刷新子进程输入失败")?;
         Ok(())
@@ -632,6 +675,57 @@ impl McpSession {
         Ok(bound_result(result))
     }
 
+    pub(crate) async fn call_app_tool(
+        &self,
+        tool: &str,
+        arguments: Value,
+        permit: &AtomicBool,
+    ) -> Result<Value> {
+        let result = self
+            .request_guarded(
+                "tools/call",
+                json!({"name":tool,"arguments":arguments}),
+                self.config.tool_timeout(),
+                Some(permit),
+            )
+            .await?;
+        Ok(bound_result(result))
+    }
+
+    pub(crate) async fn read_app_resource(&self, uri: &str) -> Result<Value> {
+        if !self.capabilities.lock().unwrap()["resources"].is_object() {
+            bail!("服务器未声明 resources 能力");
+        }
+        let result = self
+            .request(
+                "resources/read",
+                json!({"uri":uri}),
+                self.config.tool_timeout(),
+            )
+            .await?;
+        if serde_json::to_vec(&result)?.len() > 3 * 1024 * 1024 {
+            bail!("App 资源响应超过 3 MiB");
+        }
+        Ok(result)
+    }
+
+    pub(crate) async fn app_tools(&self) -> Result<Vec<Value>> {
+        let result = self
+            .request("tools/list", json!({}), self.config.tool_timeout())
+            .await?;
+        if serde_json::to_vec(&result)?.len() > 4 * 1024 * 1024 {
+            bail!("App 工具目录超过 4 MiB");
+        }
+        let tools = result["tools"].as_array().context("App 工具目录格式无效")?;
+        if tools.iter().any(|tool| {
+            !tool["name"].as_str().is_some_and(|name| !name.is_empty())
+                || !tool["inputSchema"].is_object()
+        }) {
+            bail!("App 工具定义无效");
+        }
+        Ok(tools.clone())
+    }
+
     async fn content_request(
         &self,
         capability: &str,
@@ -653,13 +747,11 @@ impl McpSession {
 
     /// 关闭连接并等待子进程退出。
     pub async fn shutdown(&self) {
+        self.closed.store(true, Ordering::SeqCst);
+        self.pending.lock().unwrap().clear();
         if let Some(http) = &self.http {
             http.shutdown().await;
             return;
-        }
-        {
-            let mut guard = self.stdin.lock().await;
-            guard.take();
         }
         let mut guard = self.child.lock().await;
         if let Some(child) = guard.as_mut() {
@@ -667,6 +759,8 @@ impl McpSession {
             let _ = tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
         }
         guard.take();
+        // Killing the peer first breaks a blocked pipe writer before taking its lock.
+        self.stdin.lock().await.take();
     }
 
     /// 给界面用的会话摘要。
@@ -708,6 +802,10 @@ fn project_tool(tool: &Value) -> Value {
         ),
         "required": required,
         "inputSchema": schema,
+        "_meta": {
+            "ui": tool["_meta"]["ui"],
+            "ui/resourceUri": tool["_meta"]["ui/resourceUri"],
+        },
     })
 }
 
@@ -805,6 +903,10 @@ impl McpManager {
     pub async fn connect(&self, name: &str) -> Result<Value> {
         let session = self.session(name).await?;
         Ok(json!({ "server": session.summary() }))
+    }
+
+    pub(crate) async fn app_session(&self, name: &str) -> Result<Arc<McpSession>> {
+        self.session(name).await
     }
 
     pub async fn tools(&self, name: &str, refresh: bool) -> Result<Value> {
