@@ -8,6 +8,7 @@
 //! 不引入新的第三方依赖。请求有超时，HTTP 通知流在断开或析构时终止。
 
 use crate::mcp_http::{HttpTransport, Notification};
+use crate::mcp_subscriptions::{ResourceEvent, Subscriptions};
 use crate::rpc::{hide_console, JsonLines};
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -26,7 +27,7 @@ use std::{
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     process::{Child, ChildStdin, Command},
-    sync::{mpsc, oneshot, Mutex as AsyncMutex},
+    sync::{broadcast, mpsc, oneshot, Mutex as AsyncMutex},
 };
 
 /// 与 Codex / DSH 对齐的协议版本。
@@ -38,6 +39,15 @@ const MAX_STDERR: usize = 8 * 1024;
 const MAX_DESCRIPTION: usize = 400;
 const MAX_SCHEMA: usize = 8000;
 const MAX_RESULT: usize = 256 * 1024;
+
+#[derive(Debug)]
+pub(crate) struct ServerRequestError(String);
+impl std::fmt::Display for ServerRequestError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+impl std::error::Error for ServerRequestError {}
 
 fn default_enabled() -> bool {
     true
@@ -293,6 +303,9 @@ pub struct McpSession {
     stderr: Mutex<String>,
     config: ServerConfig,
     capabilities: Mutex<Value>,
+    pub(crate) subscriptions: Subscriptions,
+    pub(crate) resource_events: broadcast::Sender<ResourceEvent>,
+    runtime: tokio::runtime::Handle,
 }
 
 impl Drop for McpSession {
@@ -353,6 +366,9 @@ impl McpSession {
             next_id: AtomicU64::new(1),
             stderr: Mutex::new(String::new()),
             capabilities: Mutex::new(json!({})),
+            subscriptions: Subscriptions::default(),
+            resource_events: broadcast::channel(128).0,
+            runtime: tokio::runtime::Handle::current(),
             config,
         });
 
@@ -413,6 +429,8 @@ impl McpSession {
             }
             dispatch_session.closed.store(true, Ordering::SeqCst);
             dispatch_session.pending.lock().unwrap().clear();
+            dispatch_session.subscriptions.clear();
+            let _ = dispatch_session.resource_events.send(ResourceEvent::Closed);
         });
 
         let response = session
@@ -479,6 +497,9 @@ impl McpSession {
             next_id: AtomicU64::new(1),
             stderr: Mutex::new(String::new()),
             capabilities: Mutex::new(json!({})),
+            subscriptions: Subscriptions::default(),
+            resource_events: broadcast::channel(128).0,
+            runtime: tokio::runtime::Handle::current(),
             config,
         });
         let response = session
@@ -513,13 +534,77 @@ impl McpSession {
 
     fn notification_handler(&self) -> Notification {
         let revision = self.tools_revision.clone();
+        let events = self.resource_events.clone();
+        let http = self.http.as_ref().map(Arc::downgrade);
         Arc::new(move |message| {
             if message.get("id").is_none()
                 && message["method"] == "notifications/tools/list_changed"
             {
                 revision.fetch_add(1, Ordering::SeqCst);
             }
+            if http
+                .as_ref()
+                .and_then(std::sync::Weak::upgrade)
+                .is_some_and(|http| !http.connected())
+            {
+                let _ = events.send(ResourceEvent::Closed);
+                return;
+            }
+            if message["jsonrpc"] != "2.0" || message.get("id").is_some() {
+                return;
+            }
+            match message["method"].as_str() {
+                Some("notifications/resources/list_changed") => {
+                    let _ = events.send(ResourceEvent::ListChanged);
+                }
+                Some("notifications/resources/updated") => {
+                    if let Some(uri) = message["params"]["uri"]
+                        .as_str()
+                        .filter(|uri| crate::mcp_subscriptions::validate_uri(uri).is_ok())
+                    {
+                        let _ = events.send(ResourceEvent::Updated(uri.to_owned()));
+                    }
+                }
+                _ => {}
+            }
         })
+    }
+
+    pub(crate) fn resource_capabilities(&self) -> Value {
+        self.capabilities.lock().unwrap()["resources"].clone()
+    }
+
+    pub(crate) async fn resource_control(
+        &self,
+        method: &str,
+        uri: &str,
+        permit: Option<&AtomicBool>,
+        timeout: Option<Duration>,
+    ) -> Result<()> {
+        if self.resource_capabilities()["subscribe"] != true {
+            bail!("服务器未声明资源订阅能力");
+        }
+        let duration = timeout.map_or(self.config.tool_timeout(), |timeout| {
+            timeout.min(self.config.tool_timeout())
+        });
+        let result = self
+            .request_guarded(method, json!({"uri":uri}), duration, permit)
+            .await?;
+        if !result.is_object() || serde_json::to_vec(&result)?.len() > MAX_RESULT {
+            bail!("资源订阅响应格式无效或超限");
+        }
+        Ok(())
+    }
+
+    pub(crate) fn release_resource_owner(
+        self: &Arc<Self>,
+        owner: String,
+        completed: impl FnOnce(Result<()>) + Send + 'static,
+    ) {
+        let session = self.clone();
+        self.runtime.spawn(async move {
+            completed(session.subscriptions.release(&session, &owner).await);
+        });
     }
 
     pub(crate) fn connected(&self) -> bool {
@@ -553,7 +638,12 @@ impl McpSession {
                 .post_guarded(&payload, timeout, &self.notification_handler(), permit)
                 .await?;
             if let Some(error) = message.get("error") {
-                bail!("{}：{}", method, truncate(&error.to_string(), 400));
+                return Err(ServerRequestError(format!(
+                    "{}：{}",
+                    method,
+                    truncate(&error.to_string(), 400)
+                ))
+                .into());
             }
             return Ok(message["result"].clone());
         }
@@ -575,7 +665,12 @@ impl McpSession {
         match tokio::time::timeout_at(deadline, rx).await {
             Ok(Ok(message)) => {
                 if let Some(error) = message.get("error") {
-                    bail!("{}：{}", method, truncate(&error.to_string(), 400));
+                    return Err(ServerRequestError(format!(
+                        "{}：{}",
+                        method,
+                        truncate(&error.to_string(), 400)
+                    ))
+                    .into());
                 }
                 Ok(message["result"].clone())
             }
@@ -749,6 +844,8 @@ impl McpSession {
     /// 关闭连接并等待子进程退出。
     pub async fn shutdown(&self) {
         self.closed.store(true, Ordering::SeqCst);
+        self.subscriptions.clear();
+        let _ = self.resource_events.send(ResourceEvent::Closed);
         self.pending.lock().unwrap().clear();
         if let Some(http) = &self.http {
             http.shutdown().await;

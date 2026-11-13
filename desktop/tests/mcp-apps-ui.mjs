@@ -61,6 +61,8 @@ export async function mcpAppsChecks(page, profile, artifacts, checks, errors, {r
   assert.equal((await frame.locator('#capabilities').innerText()).includes('serverResources'),false);
   await frame.getByRole('button',{name:'读取服务器资源',exact:true}).click();
   await frame.locator('#output').filter({hasText:'未获授权'}).waitFor();
+  await frame.getByRole('button',{name:'订阅实时资源',exact:true}).click();
+  await frame.locator('#output').filter({hasText:'未获授权'}).waitFor();
   assert.equal((await frame.locator('#capabilities').innerText()).includes('"message":'),false);
   await frame.getByRole('button',{name:'发送到 Pi 对话',exact:true}).click();
   await frame.locator('#output').filter({hasText:'未获授权'}).waitFor();
@@ -105,6 +107,7 @@ export async function mcpAppsChecks(page, profile, artifacts, checks, errors, {r
   frame = child.frameLocator('iframe[title="MCP App"]');
   await frame.locator('#initial').filter({hasText:'"count":7'}).waitFor();
   await frame.locator('#capabilities').filter({hasText:'serverResources'}).waitFor();
+  assert.equal(JSON.parse(await frame.locator('#capabilities').innerText()).experimental['pi-desktop/resource-subscriptions'].maxSubscriptions,64);
   assert.deepEqual(JSON.parse(await frame.locator('#capabilities').innerText()).message,{text:{}});
   assert.deepEqual(JSON.parse(await frame.locator('#capabilities').innerText()).updateModelContext,{text:{},structuredContent:{}});
   for (const name of ['更新旧上下文','更新最新上下文','清除上下文','更新最新上下文']) {
@@ -144,8 +147,25 @@ export async function mcpAppsChecks(page, profile, artifacts, checks, errors, {r
   await child.screenshot({path:path.join(artifacts,'mcp-app-resources.png')});
   await frame.getByRole('button',{name:'读取二进制资源',exact:true}).click();
   await frame.locator('#output').filter({hasText:'"blob":"AAEC"'}).waitFor();
+  await frame.getByRole('button',{name:'订阅实时资源',exact:true}).click();
+  await frame.locator('#output').filter({hasText:/^\{\}$/}).waitFor();
   await frame.getByRole('button',{name:'刷新服务器数据',exact:true}).click();
   await frame.locator('#output').filter({hasText:'"count":42'}).waitFor();
+  await frame.locator('#live').filter({hasText:'LIVE_REVISION:1'}).waitFor();
+  await child.screenshot({path:path.join(artifacts,'mcp-app-subscription-update.png')});
+  await frame.getByRole('button',{name:'取消资源订阅',exact:true}).click();
+  await frame.locator('#output').filter({hasText:/^\{\}$/}).waitFor();
+  await page.waitForTimeout(200);
+  const received=await frame.locator('body').evaluate(()=>window.mcpAppMessages.filter(message=>message.method==='notifications/resources/updated').length);
+  await frame.getByRole('button',{name:'刷新服务器数据',exact:true}).click();
+  await frame.locator('#output').filter({hasText:'"count":42'}).waitFor();
+  await page.waitForTimeout(250);
+  assert.equal(await frame.locator('body').evaluate(()=>window.mcpAppMessages.filter(message=>message.method==='notifications/resources/updated').length),received);
+  await frame.getByRole('button',{name:'订阅实时资源',exact:true}).click();
+  await frame.locator('#output').filter({hasText:/^\{\}$/}).waitFor();
+  await frame.getByRole('button',{name:'刷新服务器数据',exact:true}).click();
+  await frame.locator('#output').filter({hasText:'"count":42'}).waitFor();
+  await frame.locator('#live').filter({hasText:'LIVE_REVISION:3'}).waitFor();
   await child.screenshot({path:path.join(artifacts,'mcp-app-window.png')});
   await frame.getByRole('button',{name:'调用未授权工具',exact:true}).click();
   await frame.locator('#output').filter({hasText:'未获授权'}).waitFor();
@@ -205,4 +225,5 @@ export async function mcpAppsChecks(page, profile, artifacts, checks, errors, {r
   checks.push('App 资源授权默认关闭、协商能力、真实 text/blob 读取及断线拒绝');
   checks.push('App 对话消息默认拒绝、文本能力协商、Pi 来源标记/回复、草稿保留及断线拒绝');
   checks.push('App 模型上下文默认拒绝、覆盖/清除、更新无模型调用、后续 App/普通轮次临时注入及关闭清理');
+  checks.push('App 资源订阅默认拒绝、可选能力、服务端通知驱动实际读取及取消后停止投递');
 }

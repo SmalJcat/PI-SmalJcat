@@ -32,7 +32,7 @@ try {
   await frame.locator('#initial').filter({hasText:'"count":7'}).waitFor();
   assert.equal(await frame.locator('#isolation').innerText(),'parent-isolated');
   const order = await frame.locator('body').evaluate(() => window.mcpAppMessages.map(message=>message.method).filter(Boolean));
-  assert.deepEqual(order,['ui/notifications/tool-input','ui/notifications/tool-result']);
+  assert.deepEqual(order,['ui/notifications/tool-input','ui/notifications/tool-result','notifications/resources/list_changed']);
   assert.equal(await page.locator('iframe').getAttribute('sandbox'),'allow-scripts');
   assert.ok(await page.locator('body').evaluate(el=>el.scrollHeight<=innerHeight+1));
   checks.push('标准 App 初始化、输入与结果顺序、独立来源 iframe 和布局');
@@ -82,6 +82,29 @@ try {
   await frame.locator('#output').filter({hasText:/^\{\}$/}).waitFor();
   assert.deepEqual(await page.evaluate(()=>window.appHost.modelContext),{});
   checks.push('上下文更新默认拒绝、最新覆盖与清除请求转发');
+  await frame.locator('#subscribe-resource').click();
+  await frame.locator('#output').filter({hasText:/^\{\}$/}).waitFor();
+  await page.evaluate(()=>{
+    window.appHost.revision=1;
+    window.appController.notify({jsonrpc:'2.0',method:'notifications/resources/updated',params:{uri:'fixture://live'}});
+  });
+  await frame.locator('#live').filter({hasText:'LIVE_BROWSER:1'}).waitFor();
+  await frame.locator('#unsubscribe-resource').click();
+  await frame.locator('#output').filter({hasText:/^\{\}$/}).waitFor();
+  assert.ok(await page.evaluate(()=>window.appHost.calls.some(call=>call.method==='resources/unsubscribe')));
+  await page.evaluate(async()=>{
+    window.appHost.revision=2;
+    window.notificationPolls=0;
+    await window.appController.listenNotifications(async()=>{
+      window.notificationPolls++;
+      if (window.notificationPolls===1) throw new Error('transient notification failure');
+      if (window.notificationPolls===2) return {notifications:[{jsonrpc:'2.0',method:'notifications/resources/updated',params:{uri:'fixture://live'}}]};
+      return {notifications:[],closed:true};
+    });
+  });
+  await frame.locator('#live').filter({hasText:'LIVE_BROWSER:2'}).waitFor();
+  assert.equal(await page.evaluate(()=>window.notificationPolls),3);
+  checks.push('主动资源通知、初始化缓冲、订阅读取更新与取消请求转发');
   await page.evaluate(()=>{window.appHost.hold=true;});
   await frame.locator('#refresh').click();
   await page.waitForFunction(()=>typeof window.appHost.release==='function');

@@ -4,7 +4,7 @@
 <body><div id="root"></div>
 <script type="module">
 import { mountMcpApp } from '/src/mcp-app-frame.mjs';
-window.appHost = {calls:[],allow:false,allowResources:false,allowMessages:false,allowModelContext:false,hold:false};
+window.appHost = {calls:[],allow:false,allowResources:false,allowMessages:false,allowModelContext:false,hold:false,revision:0};
 const rpc = async raw => {
   const message = JSON.parse(raw);
   window.appHost.calls.push(message);
@@ -20,6 +20,10 @@ const rpc = async raw => {
   if (message.method === 'ui/update-model-context' && window.appHost.allowModelContext) {
     window.appHost.modelContext=message.params;
     return reply({});
+  }
+  if (['resources/subscribe','resources/unsubscribe'].includes(message.method) && window.appHost.allowResources) return reply({});
+  if (message.method === 'resources/read' && message.params.uri==='fixture://live' && window.appHost.allowResources) {
+    return reply({contents:[{uri:'fixture://live',mimeType:'text/plain',text:'LIVE_BROWSER:'+window.appHost.revision}]});
   }
   if (message.method === 'resources/read' && window.appHost.allowResources) return reply({contents:[
     message.params.uri === 'fixture://binary'
@@ -37,4 +41,5 @@ window.addEventListener('message', event => {
 });
 window.appController = mountMcpApp(document.getElementById('root'),
   {title:'App contract',server:'local fixture',uri:'ui://fixture/app'},url.href,rpc,()=>{});
+window.appController.notify({jsonrpc:'2.0',method:'notifications/resources/list_changed'});
 </script></body></html>

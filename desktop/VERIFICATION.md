@@ -1,5 +1,14 @@
 # Pi Desktop 发布验收
 
+## 开发分支 MCP Apps 资源订阅（2026-11-13）
+
+- `codex/mcp-app-resource-subscriptions` 按当前 MCP 2025-06-18 增加 App 资源订阅可选扩展，使用 experimental["pi-desktop/resource-subscriptions"] 协商，复用默认关闭的资源授权。标准 Apps 订阅接入仍处于提案阶段，后续协议兼容验证另行开展。[PR #8](https://github.com/SmalJcat/PI-SmalJcat/pull/8)
+- 同连接同 URI 由多个 App 共享，首个订阅和最后一个取消触发上游请求。支持每 App 64、每连接 256 限额、URI/权限校验、失败变更重新确认与受保护审计。关闭立即撤销投递并唤醒等待，等待在途变更完成后清理，各轮清理网络等待预算 3 秒。
+- 资源通知按连接及 URI 所有权筛选，HTTP GET 恢复、目录变化或广播溢出时提示当前订阅 URI 刷新。每 App 通知批次间隔至少 100ms。前端在初始化前有界缓冲，瞬时等待错误后退避重试，窗口或原连接结束后退出等待。
+- JavaScript 128、常规 Rust 182、fixture Rust 186 项通过，各 Rust 模式 4 项真实环境检查默认忽略。生产构建、格式与严格全目标 Clippy 通过，App 浏览器 8 类通过。定向 Rust 11 项覆盖共享计数、未授权/无能力、64/256 限制、溢出、GET Last-Event-ID、清理失败修复、错误隐私及关闭期间的迟到订阅确认。
+- 17:37 HKT，真实 Tauri/WebView2 全量 75 项通过，渲染错误 0、fixture 模型请求 0。debug SHA-256 为 `a8b2e7a6d531621ece952a31eacb237971b9c2e5d123e04b6dcfaae84376fc90`。真实 Pi + 本机模拟提供方的 App 专项 10 项通过，实际本机模型请求 3 次，覆盖实际通知驱动 resources/read、取消后停止投递与重新订阅。独立复核后补齐通知等待重试及终止状态，浏览器失败一次后恢复的断言通过。
+- 证据为 `artifacts/app-subscriptions-{host-reviewed,js,browser-reviewed,full-rust-final,full-rust-fixture-final,full-fmt-final,full-clippy-final}.log`、`app-subscriptions-real-pi-result.json`、`app-subscriptions-full-ui-result.json`，截图为 `mcp-app-subscription-update.png`。MCP 使用隔离 stdio/回环 HTTP，外部请求数未经独立观测，回执为 null。
+
 ## 0.7.1 MCP Apps 模型上下文交付（2026-11-13）
 
 - `codex/mcp-app-model-context` 新增默认关闭的 allowModelContext，独立于消息授权。ui/update-model-context 接收文本数组及 structuredContent 对象，逐 App 覆盖或清空最新状态。授权绑定 Pi 连接、会话和编辑代次，使用内存弱注册表保存各窗口快照。[PR #7](https://github.com/SmalJcat/PI-SmalJcat/pull/7)

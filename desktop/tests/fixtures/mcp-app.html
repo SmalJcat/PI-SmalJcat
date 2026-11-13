@@ -15,6 +15,9 @@
 <button id="context-old">更新旧上下文</button>
 <button id="context-latest">更新最新上下文</button>
 <button id="context-clear">清除上下文</button>
+<button id="subscribe-resource">订阅实时资源</button>
+<button id="unsubscribe-resource">取消资源订阅</button>
+<pre id="live"></pre>
 <pre id="capabilities"></pre>
 <pre id="output"></pre>
 <pre id="isolation"></pre>
@@ -32,6 +35,11 @@ window.addEventListener('message', event => {
   if (event.source !== window.parent) return;
   const message = event.data;
   window.mcpAppMessages.push(message);
+  if (message.method==='notifications/resources/updated' && message.params?.uri==='fixture://live') {
+    request('resources/read',{uri:'fixture://live'}).then(result=>{
+      document.getElementById('live').textContent=JSON.stringify(result);
+    }).catch(error=>{document.getElementById('live').textContent=error.message;});
+  }
   if (message.method === 'ui/resource-teardown') {
     window.parent.postMessage({jsonrpc:'2.0',id:message.id,result:{}}, '*');
     return;
@@ -66,6 +74,8 @@ document.getElementById('context-latest').onclick = () => run('ui/update-model-c
   content:[{type:'text',text:'MCP_CONTEXT_LATEST'}],structuredContent:{selection:2,labels:['中文','🙂']},
 });
 document.getElementById('context-clear').onclick = () => run('ui/update-model-context', {});
+document.getElementById('subscribe-resource').onclick = () => run('resources/subscribe',{uri:'fixture://live'});
+document.getElementById('unsubscribe-resource').onclick = () => run('resources/unsubscribe',{uri:'fixture://live'});
 try {
   window.parent.document.title;
   document.getElementById('isolation').textContent = 'parent-accessible';

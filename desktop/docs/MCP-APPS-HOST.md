@@ -13,7 +13,7 @@
 
 `mcp-app-open` 接受可选布尔字段 `allowResources`，省略时为 `false`，返回结构为 `{id,label}`。授权面板提供“允许 App 读取此服务器的资源”复选框，默认关闭。此授权覆盖原 MCP 连接提供的资源 URI，关闭窗口后释放。
 
-授权后，`ui/initialize` 的响应声明 `hostCapabilities.serverResources = {}`，App 可发送标准 `resources/read {uri}` 请求。响应原样返回 MCP `ReadResourceResult`，包含完整的 text/blob、URI、MIME 与服务端元数据。单次 JSON 结果上限为 256 KiB，超过时返回错误。
+授权后，`ui/initialize` 的响应声明 `hostCapabilities.serverResources`，App 可发送 `resources/read {uri}` 请求。支持目录通知的服务器会声明 listChanged，资源订阅通过下述可选扩展协商。读取响应原样返回 MCP `ReadResourceResult`，包含完整的 text/blob、URI、MIME 与服务端元数据。单次 JSON 结果上限为 256 KiB，超过时返回错误。
 
 请求要求已完成初始化、资源授权有效且原连接存活，URI 必须为长度不超过 4096 字节的非空绝对 URI。请求与工具调用共享 16 项在途上限及 ID 去重。传输提交前与结果返回前核对窗口许可，服务器断开重连后旧窗口失效，底层诊断链写入主窗口宿主审计。资源目录变更通知、订阅和模型上下文更新另行扩展。
 
@@ -47,14 +47,14 @@ Core 新增绑定对象的创建与发送方法，在现有操作锁内核对会
 
 服务端 notifications/resources/updated 仅投递到该连接中订阅了对应 URI 的有效 App，目录变化投递到获准且已初始化的 App。App 自行按需读取更新内容。HTTP GET 通知流重连或接收缓冲溢出时，宿主为当前订阅 URI 提供刷新提示；原 MCP 会话失效后需重新打开 App。
 
-新增窗口接口 `widget_command {operation:"app-notifications"}`，响应 `{notifications:[]}`，按实际窗口标签验证并等待至多 30 秒。app-bootstrap 增加 resourceNotifications 布尔值，前端据此建立等待循环并向 iframe 转发通知。关闭立即撤销投递并唤醒等待，后台在总计 3 秒内尽力取消已无人使用的远端订阅，失败写入宿主审计。失败的订阅变更在后续显式请求中重新确认。
+新增窗口接口 `widget_command {operation:"app-notifications"}`，响应 `{notifications:[],closed?:boolean}`，按实际窗口标签验证并等待至多 30 秒。closed 表示窗口通知通道结束。app-bootstrap 增加 resourceNotifications 布尔值，前端据此建立等待循环、在瞬时错误后退避重试，并向 iframe 转发通知。关闭立即撤销投递并唤醒等待，后台等待在途变更完成后，优先清理本窗口刚释放的 URI，每轮网络等待预算为 3 秒，失败写入宿主审计。失败的订阅变更在后续显式请求中重新确认。
 
 
 ## 子窗口接口
 
-新增受窗口标签约束的 `widget_command {operation,payload}`，只允许 `identity`、`invoke`、`app-bootstrap`、`app-rpc`、`app-close`。最后一项仅关闭调用方自己的 App 窗口。身份从实际窗口反查，主窗口通用命令仍执行原有 main-only 校验。
+受窗口标签约束的 `widget_command {operation,payload}` 支持 `identity`、`invoke`、`app-bootstrap`、`app-rpc`、`app-notifications`、`app-close`。关闭操作作用于调用方自己的 App 窗口。身份从实际窗口反查，主窗口通用命令执行 main-only 校验。
 
-`app-bootstrap` 返回展示来源与本窗口专属资源 URL。`app-rpc {message}` 接收标准 JSON-RPC 文本，返回 `{response,notifications}`。支持 `ui/initialize`、`ui/notifications/initialized`、`ping`、授权后的 `tools/call`、`resources/read`、`ui/message`、`ui/update-model-context`、日志和固定窗口显示模式。未实现的方法返回协议错误。
+`app-bootstrap` 返回展示来源、本窗口资源 ID 与通知能力。`app-rpc {message}` 接收 JSON-RPC 文本，返回 `{response,notifications}`。支持初始化、ping、授权后的 tools/call、resources/read、ui/message、ui/update-model-context、资源订阅扩展、日志和固定窗口显示模式。app-notifications 提供异步资源通知。未实现的方法返回协议错误。
 
 App 完成初始化通知后，宿主依序发送 `ui/notifications/tool-input` 与 `ui/notifications/tool-result`。调用同时受用户工具授权和服务器 `_meta.ui.visibility` 约束。断开连接后旧窗口的调用失败，重新连接需重新打开 App。
 

@@ -144,6 +144,21 @@ async fn widget_command(
     let services = &state.services;
     let result: Result<Value> = match operation.as_str() {
         "app-bootstrap" => services.apps.bootstrap(window.label()),
+        "app-notifications" => match services.apps.notifications(window.label()).await {
+            Ok(value) => Ok(value),
+            Err(error) => {
+                let ended = services
+                    .apps
+                    .bootstrap(window.label())
+                    .map(|info| info["resourceNotifications"] != true)
+                    .unwrap_or(true);
+                if ended {
+                    Ok(json!({"notifications":[],"closed":true}))
+                } else {
+                    Err(error)
+                }
+            }
+        },
         "app-close" => match services.apps.bootstrap(window.label()) {
             Ok(identity) => {
                 services.apps.close(identity["id"].as_str().unwrap());

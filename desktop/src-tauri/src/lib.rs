@@ -15,6 +15,7 @@ pub mod mcp_app_host;
 pub mod mcp_apps;
 pub mod mcp_client;
 mod mcp_http;
+mod mcp_subscriptions;
 pub mod permissions;
 pub mod retention;
 pub mod review;
