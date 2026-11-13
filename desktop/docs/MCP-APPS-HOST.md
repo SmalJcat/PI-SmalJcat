@@ -31,7 +31,7 @@ Core 新增绑定对象的创建与发送方法，在现有操作锁内核对会
 
 ## 模型上下文增量契约
 
-`codex/mcp-app-model-context` 为 `mcp-app-open` 增加可选布尔字段 `allowModelContext`，默认 false，返回结构为 `{id,label}`。授权面板显示“允许 App 为此 Pi 对话提供模型上下文”，说明内容用于后续模型请求、可能增加用量。该授权独立于消息发送授权，绑定打开时的 Pi 连接、会话和编辑代次。
+`mcp-app-open` 接受可选布尔字段 `allowModelContext`，默认 false，返回结构为 `{id,label}`。授权面板显示“允许 App 为此 Pi 对话提供模型上下文”，说明内容用于后续模型请求、可能增加用量。该授权独立于消息发送授权，绑定打开时的 Pi 连接、会话和编辑代次。
 
 获准后声明 `hostCapabilities.updateModelContext = {text:{},structuredContent:{}}`，接受 `ui/update-model-context {content?:TextContent[],structuredContent?:object}`，成功返回 `{}`。同一 App 的有效更新依次覆盖，空对象清除该 App 的上下文。请求沿用 64 KiB 消息上限及在途/ID 限制，更新本身只校验会话和保存内存状态。
 
