@@ -41,6 +41,16 @@ Core 新增绑定对象的创建与发送方法，在现有操作锁内核对会
 
 ## 子窗口接口
 
+## 资源订阅增量契约
+
+`codex/mcp-app-resource-subscriptions` 按当前 MCP 2025-06-18 会话语义增加资源订阅。App 侧通过 `hostCapabilities.experimental["pi-desktop/resource-subscriptions"] = {maxSubscriptions:64}` 声明可选能力；资源目录通知通过标准 serverResources.listChanged 声明。此接入属于 Pi Desktop 可选扩展。[MCP 资源协议](https://modelcontextprotocol.io/specification/2025-06-18/server/resources) [Apps 订阅提案](https://github.com/modelcontextprotocol/ext-apps/issues/659)
+
+复用默认关闭的 allowResources。获准后，可向原 MCP 连接发送 `resources/subscribe {uri}` 和 `resources/unsubscribe {uri}`，成功返回 `{}`，服务端须声明 resources.subscribe。URI 沿用 4096 字节绝对 URI 校验，每 App 最多 64 个，每连接最多 256 个。相同连接、相同 URI 由多个 App 共享，首个订阅与最后一个取消触发服务端请求。
+
+服务端 notifications/resources/updated 仅投递到该连接中订阅了对应 URI 的有效 App，目录变化投递到获准且已初始化的 App。App 自行按需读取更新内容。HTTP GET 通知流重连或接收缓冲溢出时，宿主为当前订阅 URI 提供刷新提示；原 MCP 会话失效后需重新打开 App。
+
+新增窗口接口 `widget_command {operation:"app-notifications"}`，响应 `{notifications:[]}`，按实际窗口标签验证并等待至多 30 秒。app-bootstrap 增加 resourceNotifications 布尔值，前端据此建立等待循环并向 iframe 转发通知。关闭立即撤销投递并唤醒等待，后台在总计 3 秒内尽力取消已无人使用的远端订阅，失败写入宿主审计。失败的订阅变更在后续显式请求中重新确认。
+
 
 新增受窗口标签约束的 `widget_command {operation,payload}`，只允许 `identity`、`invoke`、`app-bootstrap`、`app-rpc`、`app-close`。最后一项仅关闭调用方自己的 App 窗口。身份从实际窗口反查，主窗口通用命令仍执行原有 main-only 校验。
 
