@@ -19,6 +19,16 @@
 
 ## 子窗口接口
 
+## 对话消息增量契约
+
+`codex/mcp-app-chat` 为 `mcp-app-open` 增加可选布尔字段 `allowMessages`，默认 `false`，返回结构为 `{id,label}`。授权面板显示“允许 App 向此 Pi 对话发送消息”，并说明发送会触发 Pi 回复、可能产生模型费用。开启时由原生宿主捕获当前 Pi 连接代次、会话 ID 与消息编辑代次，绑定到本次 App 窗口。
+
+获准的窗口可提交 `ui/message {role:"user",content:[{type:"text",text:string}]}`，兼容稳定版示例中的单个 text 对象。文本块按顺序连接，空文本与其他内容类型返回错误。初始化响应声明 `hostCapabilities.message = {text:{}}`，成功响应为 `{}`。消息带上宿主生成的服务器与工具来源标记，经原有 Pi prompt 路径进入对话并产生回复。
+
+请求要求 App 完成初始化、原 MCP 连接与 Pi 绑定有效，且 Pi 空闲。与 App 工具/资源请求共享在途上限和 ID 去重。会话切换、Pi 重连或通过桌面编辑历史消息后，需重新打开并授权 App。提交到 Pi 串行写入队列前核对窗口许可，已提交消息可继续执行。失败详情留在主窗口宿主审计。主输入框草稿独立于 App 发送。
+
+Core 新增绑定对象的创建与发送方法，在现有操作锁内核对会话代次、编辑代次及会话 ID，复用普通 prompt 的会话保护和工具权限。正式包 App 专项使用隔离 Pi 配置及本机 OpenAI 兼容服务完成回复，回执区分本机提供方请求与外部模型请求。
+
 新增受窗口标签约束的 `widget_command {operation,payload}`，只允许 `identity`、`invoke`、`app-bootstrap`、`app-rpc`、`app-close`。最后一项仅关闭调用方自己的 App 窗口。身份从实际窗口反查，主窗口通用命令仍执行原有 main-only 校验。
 
 `app-bootstrap` 返回展示来源与本窗口专属资源 URL。`app-rpc {message}` 接收标准 JSON-RPC 文本，返回 `{response,notifications}`。支持 `ui/initialize`、`ui/notifications/initialized`、`ping`、授权后的同连接 `tools/call` 与 `resources/read`、日志和固定窗口显示模式。未实现的方法返回协议错误。
