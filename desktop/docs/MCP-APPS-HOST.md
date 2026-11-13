@@ -9,6 +9,14 @@
 - `mcp-app-close {id}` 关闭预备或已打开的 App，会话授权随之释放。
 - `widget-audit` 同时返回旧演示与真实 App 的调用审计。
 
+## 资源代理增量契约
+
+本节为 `codex/mcp-app-resources` 的开发契约。`mcp-app-open` 新增可选布尔字段 `allowResources`，省略时为 `false`，返回结构继续为 `{id,label}`。授权面板提供“允许 App 读取此服务器的资源”复选框，默认关闭。此授权覆盖原 MCP 连接提供的资源 URI，关闭窗口后释放。
+
+授权后，`ui/initialize` 的响应声明 `hostCapabilities.serverResources = {}`，App 可发送标准 `resources/read {uri}` 请求。响应原样返回 MCP `ReadResourceResult`，包含完整的 text/blob、URI、MIME 与服务端元数据。单次 JSON 结果上限为 256 KiB，超过时返回错误。
+
+请求要求已完成初始化、资源授权有效且原连接存活，URI 必须为长度不超过 4096 字节的非空绝对 URI。请求与工具调用共享 16 项在途上限及 ID 去重。传输提交前与结果返回前核对窗口许可，服务器断开重连后旧窗口失效，底层诊断链写入主窗口宿主审计。资源目录变更通知、订阅和聊天协作另行扩展。
+
 ## 子窗口接口
 
 新增受窗口标签约束的 `widget_command {operation,payload}`，只允许 `identity`、`invoke`、`app-bootstrap`、`app-rpc`、`app-close`。最后一项仅关闭调用方自己的 App 窗口。身份从实际窗口反查，主窗口通用命令仍执行原有 main-only 校验。
