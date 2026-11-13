@@ -1,3 +1,5 @@
+#[cfg(feature = "test-fixture")]
+use pi_desktop::mcp_app_host::PiAccess;
 use pi_desktop::{
     mcp_app_host::{resource_document, McpAppHost, UI_MIME},
     mcp_client::McpManager,
@@ -9,6 +11,9 @@ use std::{
     path::PathBuf,
     process::{Child, Command, Stdio},
 };
+
+#[cfg(feature = "test-fixture")]
+static CORE_FIXTURE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[tokio::test]
 async fn stalled_stdio_writes_are_bounded_and_close_the_partial_transport() {
@@ -246,6 +251,7 @@ async fn app_chat_messages_bind_to_pi_and_reject_stale_busy_or_revoked_sends() {
     use pi_desktop::core::{ConnectOptions, Core};
     use std::{sync::atomic::AtomicBool, time::Duration};
 
+    let _environment = CORE_FIXTURE.lock().await;
     let root = tempfile::tempdir().unwrap();
     let work = root.path().join("work");
     fs::create_dir(&work).unwrap();
@@ -292,7 +298,18 @@ async fn app_chat_messages_bind_to_pi_and_reject_stale_busy_or_revoked_sends() {
     let id = prepared["id"].as_str().unwrap();
     let binding = core.bind_app_chat().await.unwrap();
     let label = host
-        .activate(id, &[], false, Some(binding.clone()), json!({}), json!({}))
+        .activate(
+            id,
+            &[],
+            false,
+            Some(PiAccess {
+                binding: binding.clone(),
+                messages: true,
+                model_context: false,
+            }),
+            json!({}),
+            json!({}),
+        )
         .unwrap();
     let payload = json!({"role":"user","content":[{"type":"text","text":"APP_CHAT_ONE"},{"type":"text","text":"second"}]});
     let early = message(&host, &label, json!(3), "ui/message", payload.clone()).await;
@@ -669,6 +686,305 @@ async fn stdio_apps_negotiate_bind_resources_authorize_and_reject_old_connection
 }
 
 struct HttpFixture(Child);
+
+#[cfg(feature = "test-fixture")]
+#[tokio::test]
+async fn app_model_contexts_are_latest_scoped_and_removed_without_changing_history() {
+    use pi_desktop::core::{ConnectOptions, Core};
+    use std::time::Duration;
+    let _environment = CORE_FIXTURE.lock().await;
+    let root = tempfile::tempdir().unwrap();
+    let work = root.path().join("work");
+    fs::create_dir(&work).unwrap();
+    std::env::set_var("PI_DESKTOP_TEST", "1");
+    std::env::set_var("PI_DESKTOP_EXECUTABLE", "node");
+    std::env::set_var(
+        "PI_DESKTOP_RPC_SCRIPT",
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tests/fixture-pi.mjs"),
+    );
+    std::env::set_var("PI_CODING_AGENT_DIR", root.path().join("agent"));
+    std::env::set_var("PI_CODING_AGENT_SESSION_DIR", root.path().join("sessions"));
+    let core = Core::new(&root.path().join("profile")).unwrap();
+    core.connect(ConnectOptions {
+        cwd: Some(work.to_string_lossy().into_owned()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let mcp = stdio_manager(root.path());
+    let host = McpAppHost::default();
+    async fn contexts(core: &Core) -> Value {
+        core.current()
+            .await
+            .unwrap()
+            .rpc
+            .call("get_desktop_app_context", json!({}))
+            .await
+            .unwrap()["contexts"]
+            .clone()
+    }
+    let prepared = host.prepare(&mcp, "fixture", "app_view").await.unwrap();
+    let first_id = prepared["id"].as_str().unwrap();
+    let denied_label = host
+        .activate(first_id, &[], false, None, json!({}), json!({}))
+        .unwrap();
+    initialize(&host, &denied_label).await;
+    let denied = message(
+        &host,
+        &denied_label,
+        json!(2),
+        "ui/update-model-context",
+        json!({"structuredContent":{"denied":true}}),
+    )
+    .await;
+    assert_eq!(denied["response"]["error"]["code"], -32000);
+    assert_eq!(contexts(&core).await, json!([]));
+    host.close(first_id);
+
+    let first = host.prepare(&mcp, "fixture", "app_view").await.unwrap();
+    let first_id = first["id"].as_str().unwrap();
+    let binding = core.bind_app_chat().await.unwrap();
+    let first_label = host
+        .activate(
+            first_id,
+            &[],
+            false,
+            Some(PiAccess {
+                binding: binding.clone(),
+                messages: false,
+                model_context: true,
+            }),
+            json!({}),
+            json!({}),
+        )
+        .unwrap();
+    let ready = initialize(&host, &first_label).await;
+    assert_eq!(
+        ready["initializeResult"]["hostCapabilities"]["updateModelContext"],
+        json!({"text":{},"structuredContent":{}})
+    );
+    assert!(ready["initializeResult"]["hostCapabilities"]["message"].is_null());
+    for (index, payload) in [
+        json!({"content":[{"type":"text","text":"old"}]}),
+        json!({"content":[{"type":"text","text":"latest"}],"structuredContent":{"selected":2}}),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let reply = message(
+            &host,
+            &first_label,
+            json!(index + 3),
+            "ui/update-model-context",
+            payload,
+        )
+        .await;
+        assert_eq!(reply["response"]["result"], json!({}));
+    }
+    let values = contexts(&core).await;
+    assert_eq!(values.as_array().unwrap().len(), 1);
+    assert_eq!(values[0]["content"][0]["text"], "latest");
+    assert_eq!(values[0]["structuredContent"]["selected"], 2);
+    assert_eq!(values[0]["id"], first_id);
+    assert!(core.snapshot().await.unwrap()["messages"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    let invalid = message(
+        &host,
+        &first_label,
+        json!(5),
+        "ui/update-model-context",
+        json!({"structuredContent":[]}),
+    )
+    .await;
+    assert!(invalid["response"]["error"].is_object());
+    assert_eq!(contexts(&core).await, values);
+
+    let second = host.prepare(&mcp, "fixture", "app_view").await.unwrap();
+    let second_id = second["id"].as_str().unwrap();
+    let second_label = host
+        .activate(
+            second_id,
+            &[],
+            false,
+            Some(PiAccess {
+                binding: binding.clone(),
+                messages: false,
+                model_context: true,
+            }),
+            json!({}),
+            json!({}),
+        )
+        .unwrap();
+    initialize(&host, &second_label).await;
+    message(
+        &host,
+        &second_label,
+        json!(6),
+        "ui/update-model-context",
+        json!({"structuredContent":{"other":true}}),
+    )
+    .await;
+    assert_eq!(contexts(&core).await.as_array().unwrap().len(), 2);
+    message(
+        &host,
+        &first_label,
+        json!(7),
+        "ui/update-model-context",
+        json!({}),
+    )
+    .await;
+    let remaining = contexts(&core).await;
+    assert_eq!(remaining.as_array().unwrap().len(), 1);
+    assert_eq!(remaining[0]["id"], second_id);
+    let wrong_token = core
+        .current()
+        .await
+        .unwrap()
+        .rpc
+        .call("get_desktop_app_context", json!({"token":"invalid"}))
+        .await
+        .unwrap();
+    assert_eq!(wrong_token["cancelled"], true);
+    let wrong_session = core
+        .current()
+        .await
+        .unwrap()
+        .rpc
+        .call("get_desktop_app_context", json!({"sessionId":"foreign"}))
+        .await
+        .unwrap();
+    assert_eq!(wrong_session["contexts"], json!([]));
+
+    let (earlier, later) = tokio::join!(
+        biased;
+        message(
+            &host,
+            &first_label,
+            json!(8),
+            "ui/update-model-context",
+            json!({"structuredContent":{"sequence":1}})
+        ),
+        message(
+            &host,
+            &first_label,
+            json!(9),
+            "ui/update-model-context",
+            json!({"structuredContent":{"sequence":2}})
+        ),
+    );
+    assert_eq!(earlier["response"]["result"], json!({}));
+    assert_eq!(later["response"]["result"], json!({}));
+    assert_eq!(
+        contexts(&core)
+            .await
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|value| value["id"] == first_id)
+            .unwrap()["structuredContent"]["sequence"],
+        2
+    );
+    host.close(first_id);
+    assert_eq!(contexts(&core).await.as_array().unwrap().len(), 1);
+    core.command("prompt", json!({"message":"等待 context update"}))
+        .await
+        .unwrap();
+    let busy_update = message(
+        &host,
+        &second_label,
+        json!(10),
+        "ui/update-model-context",
+        json!({"structuredContent":{"duringRun":true}}),
+    )
+    .await;
+    assert_eq!(busy_update["response"]["result"], json!({}));
+    core.command("abort", json!({})).await.unwrap();
+    let snapshot = core.snapshot().await.unwrap();
+    assert!(!snapshot["messages"].to_string().contains("duringRun"));
+    let entry = snapshot["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["role"] == "user")
+        .unwrap()["_entryId"]
+        .as_str()
+        .unwrap();
+    core.prepare_message_edit(snapshot["state"]["sessionId"].as_str().unwrap(), entry)
+        .await
+        .unwrap();
+    assert_eq!(contexts(&core).await, json!([]));
+    let stale = message(
+        &host,
+        &second_label,
+        json!(11),
+        "ui/update-model-context",
+        json!({"structuredContent":{"stale":true}}),
+    )
+    .await;
+    assert!(stale["response"]["error"].is_object());
+    host.close(second_id);
+
+    let fresh = host.prepare(&mcp, "fixture", "app_view").await.unwrap();
+    let fresh_id = fresh["id"].as_str().unwrap();
+    let fresh_label = host
+        .activate(
+            fresh_id,
+            &[],
+            false,
+            Some(PiAccess {
+                binding: core.bind_app_chat().await.unwrap(),
+                messages: false,
+                model_context: true,
+            }),
+            json!({}),
+            json!({}),
+        )
+        .unwrap();
+    initialize(&host, &fresh_label).await;
+    message(
+        &host,
+        &fresh_label,
+        json!(12),
+        "ui/update-model-context",
+        json!({"structuredContent":{"connected":true}}),
+    )
+    .await;
+    assert_eq!(contexts(&core).await.as_array().unwrap().len(), 1);
+    mcp.disconnect("fixture").await;
+    assert_eq!(contexts(&core).await, json!([]));
+    mcp.connect("fixture").await.unwrap();
+    assert_eq!(contexts(&core).await, json!([]));
+    host.close(fresh_id);
+    let active = core.snapshot().await.unwrap();
+    let context = core.bind_app_chat().await.unwrap().model_context(
+        "old-binding".into(),
+        "source".into(),
+        || true,
+    );
+    context
+        .update(&json!({"structuredContent":{"beforeReconnect":true}}))
+        .await
+        .unwrap();
+    assert_eq!(contexts(&core).await.as_array().unwrap().len(), 1);
+    core.connect(ConnectOptions {
+        cwd: Some(work.to_string_lossy().into_owned()),
+        session_path: Some(active["state"]["sessionFile"].as_str().unwrap().to_owned()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    assert!(context
+        .update(&json!({"structuredContent":{"reconnected":true}}))
+        .await
+        .is_err());
+    assert_eq!(contexts(&core).await, json!([]));
+    tokio::time::timeout(Duration::from_secs(10), core.shutdown())
+        .await
+        .unwrap();
+    mcp.disconnect("*").await;
+}
 impl HttpFixture {
     fn start(log: &std::path::Path) -> (Self, String) {
         let mut command = Command::new("node");

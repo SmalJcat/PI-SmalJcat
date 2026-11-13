@@ -127,8 +127,9 @@ try {
     if (chatProvider) assert.equal(info.snapshot.state.model.provider,'app-chat-local');
     await mcpAppsChecks(page, path.join(temp,'profile'), artifacts, checks, errors, {
       replyText:chatProvider?.responseText || '已完成检查。',
+      providerRequests:chatProvider?.requests,
     });
-    if (chatProvider) assert.equal(chatProvider.requests.length,1);
+    if (chatProvider) assert.equal(chatProvider.requests.length,3);
   } else {
     await page.getByRole('button', { name: 'README.md', exact: true }).click();
     await page.getByRole('dialog').locator('.numbered-code').getByText('这是文件预览内容。', { exact: false }).waitFor();

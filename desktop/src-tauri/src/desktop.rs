@@ -1,7 +1,7 @@
 use crate::{
     core::{ConnectOptions, Core},
     index_store::IndexStore,
-    mcp_app_host::McpAppHost,
+    mcp_app_host::{McpAppHost, PiAccess},
     mcp_apps::WidgetHost,
     mcp_client::McpManager,
     terminal::Terminal,
@@ -568,8 +568,17 @@ async fn dispatch(
                 .map(|value| value.as_bool().context("App 消息授权必须为布尔值"))
                 .transpose()?
                 .unwrap_or(false);
-            let chat = if allow_messages {
-                Some(core.bind_app_chat().await?)
+            let allow_context = payload
+                .get("allowModelContext")
+                .map(|value| value.as_bool().context("App 上下文授权必须为布尔值"))
+                .transpose()?
+                .unwrap_or(false);
+            let pi = if allow_messages || allow_context {
+                Some(PiAccess {
+                    binding: core.bind_app_chat().await?,
+                    messages: allow_messages,
+                    model_context: allow_context,
+                })
             } else {
                 None
             };
@@ -577,7 +586,7 @@ async fn dispatch(
                 &id,
                 &grants,
                 allow_resources,
-                chat,
+                pi,
                 payload["arguments"].clone(),
                 payload["result"].clone(),
             )?;

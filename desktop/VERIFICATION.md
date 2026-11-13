@@ -1,5 +1,13 @@
 # Pi Desktop 发布验收
 
+## 开发分支 MCP Apps 模型上下文（2026-11-13）
+
+- `codex/mcp-app-model-context` 新增默认关闭的 allowModelContext，独立于消息授权。ui/update-model-context 接收文本数组及 structuredContent 对象，逐 App 覆盖或清空最新状态。授权绑定 Pi 连接、会话和编辑代次，使用内存弱注册表保存各窗口快照。[PR #7](https://github.com/SmalJcat/PI-SmalJcat/pull/7)
+- Pi context 扩展事件通过令牌私有通道读取当前会话有效快照，以带来源的临时 user 消息扩展本轮模型输入。关闭、MCP 断开、Pi 切换/重连或桌面历史编辑使旧数据退出后续快照。内部请求由原生宿主处理，沿用主草稿与会话历史流程。
+- JavaScript 128、常规 Rust 178、fixture Rust 182 项通过，各 Rust 模式 4 项真实环境检查默认忽略。生产构建、格式及严格全目标 Clippy 通过，App 浏览器 7 类通过。定向 Rust 9 项及注册表检查覆盖默认拒绝、格式/64 KiB 边界、多 App、覆盖/清空、令牌、会话隔离、忙碌时更新、关闭/断线及编辑/重连失效。
+- 15:44 HKT，真实 Tauri/WebView2 全量 74 项通过，渲染错误 0、fixture 模型请求 0。debug SHA-256 为 `a1d77dce56d7bc57edacfbaa0f761b72c156823846b76ba5084c0baa49b6e34a`。独立复核覆盖 Core、扩展与验收；并发覆盖断言已使用固定轮询顺序核验更新次序。
+- 真实 Pi + 临时 app-chat-local 提供方的 App 专项 9 项通过，本机实际请求 3 次。更新阶段请求数为 0；App 消息与普通用户消息的请求体包含最新文本/结构化数据，关闭后的请求体已移除这些数据，会话历史验证通过。证据为 `artifacts/app-context-{host-reviewed,registry,js,build,browser,full-rust,full-rust-fixture,full-fmt,full-clippy}.log`、`app-context-real-pi-result.json`、`app-context-full-ui-result.json` 及 `mcp-app-model-context-proof.json`。外部请求数量未经独立网络观测，回执为 null。
+
 ## 0.7.1 MCP Apps 对话消息交付（2026-11-13）
 
 - `codex/mcp-app-chat` 新增默认关闭的 allowMessages 授权。获准后接收标准 user 文本块数组及稳定版示例中的单对象，声明 message.text 能力，带宿主生成的服务器/工具来源进入原 Pi prompt 路径。绑定打开时的 Pi 连接、会话和编辑代次，忙时拒绝排队，切换、重连或编辑后需重新打开 App。[PR #6](https://github.com/SmalJcat/PI-SmalJcat/pull/6)

@@ -8,6 +8,7 @@ export function McpAppLauncher({ name, tool, arguments: args, result, onError }:
   const [grants, setGrants] = useState<string[]>([]);
   const [allowResources, setAllowResources] = useState(false);
   const [allowMessages, setAllowMessages] = useState(false);
+  const [allowModelContext, setAllowModelContext] = useState(false);
   const [busy, setBusy] = useState(false);
   const [opened, setOpened] = useState(false);
   const mounted = useRef(true);
@@ -33,6 +34,7 @@ export function McpAppLauncher({ name, tool, arguments: args, result, onError }:
       setGrants([]);
       setAllowResources(false);
       setAllowMessages(false);
+      setAllowModelContext(false);
       setPrepared(data);
     } catch (error) { if (mounted.current) onError(error); }
     finally { if (mounted.current) setBusy(false); }
@@ -42,7 +44,7 @@ export function McpAppLauncher({ name, tool, arguments: args, result, onError }:
     setBusy(true);
     session.current.retain = true;
     try {
-      await window.pi.mcpAppOpen({id:prepared.id,grantedTools:grants,allowResources,allowMessages,arguments:args,result});
+      await window.pi.mcpAppOpen({id:prepared.id,grantedTools:grants,allowResources,allowMessages,allowModelContext,arguments:args,result});
       if (mounted.current) setOpened(true);
     } catch (error) {
       session.current.retain = false;
@@ -75,6 +77,11 @@ export function McpAppLauncher({ name, tool, arguments: args, result, onError }:
       <input type="checkbox" checked={allowMessages} disabled={busy || opened}
         onChange={event => setAllowMessages(event.target.checked)} />
       <span>允许 App 向此 Pi 对话发送消息<small>绑定打开时的对话，发送会触发 Pi 回复，可能产生模型费用。</small></span>
+    </label>
+    <label className="widget-grant">
+      <input type="checkbox" checked={allowModelContext} disabled={busy || opened}
+        onChange={event => setAllowModelContext(event.target.checked)} />
+      <span>允许 App 为此 Pi 对话提供模型上下文<small>保存最近一次更新，供后续模型请求使用，可能增加用量。</small></span>
     </label>
     <div className="settings-actions">
       <button className="primary-button" disabled={busy || opened} onClick={() => void open()}>

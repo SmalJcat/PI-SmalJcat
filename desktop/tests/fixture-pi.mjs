@@ -83,6 +83,7 @@ function askScout(action, payload = {}) {
   emit({ type: 'extension_ui_request', method: 'input', id, title: 'PI_DESKTOP_AGENT_RPC', placeholder: JSON.stringify({ token: process.env.PI_DESKTOP_BRIDGE_TOKEN, action, ...payload }) });
 }
 let permissionHook, permissionWait;
+const appContextQueries = new Map();
 desktopPermissions({ registerCommand(){}, on(name,handler){ if(name==='tool_call')permissionHook=handler; } });
 async function permissionTool(command) {
   active=true;emit({type:'agent_start'});completeMessage(message('user',command.message));respond(command,{disposition:'started'});
@@ -108,6 +109,14 @@ const policyContext = () => ({ model, isIdle: () => !active && !compacting, hasP
 const policy = desktopModelPolicy({ on() {}, appendEntry: (customType, data) => append({ type: 'custom', customType, data }) });
 const handle = command => {
   switch (command.type) {
+    case 'get_desktop_app_context': {
+      const id=randomUUID();
+      appContextQueries.set(id,command);
+      emit({type:'extension_ui_request',method:'input',id,title:'PI_DESKTOP_APP_CONTEXT',
+        placeholder:JSON.stringify({token:command.token ?? process.env.PI_DESKTOP_BRIDGE_TOKEN,
+          sessionId:command.sessionId ?? sessionId})});
+      return;
+    }
     case 'get_state': {
       const state = { model, thinkingLevel, isStreaming: active, isCompacting: compacting, autoCompactionEnabled: settings().enabled, sessionFile, sessionId, sessionName, messageCount: entries.length, pendingMessageCount: queue.steering.length + queue.followUp.length };
       if (scoutControl?.slow && !scoutControl.taskId) return later(() => respond(command, state), 500);
@@ -206,6 +215,12 @@ const handle = command => {
       return start(command);
     }
     case 'extension_ui_response':
+      if (appContextQueries.has(command.id)) {
+        const query=appContextQueries.get(command.id);
+        appContextQueries.delete(command.id);
+        respond(query,command.cancelled ? {contexts:[],cancelled:true} : JSON.parse(command.value));
+        return;
+      }
       if(permissionWait?.id===command.id){const pending=permissionWait;permissionWait=null;pending.resolve(command.cancelled?undefined:command.value);return;}
 
       if (scoutControl?.requestId === command.id) {

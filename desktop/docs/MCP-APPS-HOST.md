@@ -5,7 +5,7 @@
 ## 主窗口接口
 
 - `mcp-app-prepare {name,tool}` 返回 `{id,server,tool,uri,title,sha256,tools,domains}`。预备会话绑定实际 MCP 连接及资源内容，`tools` 为该服务器允许 App 调用的工具清单。
-- `mcp-app-open {id,grantedTools,allowResources?,allowMessages?,arguments,result}` 返回 `{id,label}`。工具授权默认空，资源读取和对话消息默认关闭，用户选择后打开窗口；初始输入和结果来自主窗口中刚完成的工具调用。
+- `mcp-app-open {id,grantedTools,allowResources?,allowMessages?,allowModelContext?,arguments,result}` 返回 `{id,label}`。工具授权默认空，资源、消息及模型上下文授权默认关闭，用户选择后打开窗口；初始输入和结果来自主窗口中刚完成的工具调用。
 - `mcp-app-close {id}` 关闭预备或已打开的 App，会话授权随之释放。
 - `widget-audit` 同时返回旧演示与真实 App 的调用审计。
 
@@ -35,7 +35,7 @@ Core 新增绑定对象的创建与发送方法，在现有操作锁内核对会
 
 获准后声明 `hostCapabilities.updateModelContext = {text:{},structuredContent:{}}`，接受 `ui/update-model-context {content?:TextContent[],structuredContent?:object}`，成功返回 `{}`。同一 App 的有效更新依次覆盖，空对象清除该 App 的上下文。请求沿用 64 KiB 消息上限及在途/ID 限制，更新本身只校验会话和保存内存状态。
 
-后续普通用户发送和 App 消息都会在 Pi 的 context 事件中读取此会话全部有效 App 的最新快照，以带来源标记的临时消息加入模型输入。上下文不会作为额外消息写入会话历史。窗口关闭、原 MCP 连接断开、Pi 切换/重连或桌面历史编辑后，后续快照排除旧上下文。已选入在途模型请求的快照可继续使用。
+后续普通用户发送和 App 消息都会在 Pi 的 context 事件中读取此会话全部有效 App 的最新快照。Pi 从当前历史构建本轮模型输入，上下文以带来源标记的临时消息追加在此副本中。窗口关闭、原 MCP 连接断开、Pi 切换/重连或桌面历史编辑后，后续快照排除旧上下文。已选入在途模型请求的快照可继续使用。
 
 复用已有带令牌的扩展通道，Pi 发出 `extension_ui_request {method:"input",title:"PI_DESKTOP_APP_CONTEXT",placeholder:JSON.stringify({token,sessionId})}`，原生宿主返回 `{contexts:[{id,source,content?,structuredContent?,timestamp}]}`。通道按活动 Pi 连接代次、令牌、会话和 App 授权核验，内部查询在宿主处理。
 
@@ -44,7 +44,7 @@ Core 新增绑定对象的创建与发送方法，在现有操作锁内核对会
 
 新增受窗口标签约束的 `widget_command {operation,payload}`，只允许 `identity`、`invoke`、`app-bootstrap`、`app-rpc`、`app-close`。最后一项仅关闭调用方自己的 App 窗口。身份从实际窗口反查，主窗口通用命令仍执行原有 main-only 校验。
 
-`app-bootstrap` 返回展示来源与本窗口专属资源 URL。`app-rpc {message}` 接收标准 JSON-RPC 文本，返回 `{response,notifications}`。支持 `ui/initialize`、`ui/notifications/initialized`、`ping`、授权后的 `tools/call`、`resources/read`、`ui/message`、日志和固定窗口显示模式。未实现的方法返回协议错误。
+`app-bootstrap` 返回展示来源与本窗口专属资源 URL。`app-rpc {message}` 接收标准 JSON-RPC 文本，返回 `{response,notifications}`。支持 `ui/initialize`、`ui/notifications/initialized`、`ping`、授权后的 `tools/call`、`resources/read`、`ui/message`、`ui/update-model-context`、日志和固定窗口显示模式。未实现的方法返回协议错误。
 
 App 完成初始化通知后，宿主依序发送 `ui/notifications/tool-input` 与 `ui/notifications/tool-result`。调用同时受用户工具授权和服务器 `_meta.ui.visibility` 约束。断开连接后旧窗口的调用失败，重新连接需重新打开 App。
 
@@ -64,7 +64,7 @@ stdio 的请求期限同时覆盖写入与响应。写入超时关闭可能只�
 
 ## 当前能力边界
 
-入口位于桌面 MCP 调试区，调用带“App 界面”的工具后打开授权面板。App 可在授权后调用 tools/call、resources/read 和向绑定的 Pi 对话发送文本 ui/message。资源授权覆盖该连接提供的任意 URI，单次 JSON 上限 256 KiB。模型上下文更新、外部链接和相机等浏览器权限尚未公开。服务端 HTML 在用户选择打开后加载，按声明的 CSP 来源请求网络。
+入口位于桌面 MCP 调试区，调用带“App 界面”的工具后打开授权面板。App 可在授权后调用 tools/call、resources/read、向绑定的 Pi 对话发送 ui/message，以及更新后续模型请求使用的文本/结构化上下文。资源授权覆盖该连接提供的任意 URI，单次 JSON 上限 256 KiB。外部链接和相机等浏览器权限尚未公开。服务端 HTML 在用户选择打开后加载，按声明的 CSP 来源请求网络。
 
 ## 验收
 
