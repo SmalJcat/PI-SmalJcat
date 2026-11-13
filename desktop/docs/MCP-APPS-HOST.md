@@ -19,7 +19,7 @@
 
 ## 对话消息增量契约
 
-`codex/mcp-app-chat` 为 `mcp-app-open` 增加可选布尔字段 `allowMessages`，默认 `false`，返回结构为 `{id,label}`。授权面板显示“允许 App 向此 Pi 对话发送消息”，并说明发送会触发 Pi 回复、可能产生模型费用。开启时由原生宿主捕获当前 Pi 连接代次、会话 ID 与消息编辑代次，绑定到本次 App 窗口。
+`mcp-app-open` 接受可选布尔字段 `allowMessages`，默认 `false`，返回结构为 `{id,label}`。授权面板显示“允许 App 向此 Pi 对话发送消息”，并说明发送会触发 Pi 回复、可能产生模型费用。开启时由原生宿主捕获当前 Pi 连接代次、会话 ID 与消息编辑代次，绑定到本次 App 窗口。
 
 获准的窗口可提交 `ui/message {role:"user",content:[{type:"text",text:string}]}`，兼容稳定版示例中的单个 text 对象。文本块按顺序连接，空文本与其他内容类型返回错误。初始化响应声明 `hostCapabilities.message = {text:{}}`，成功响应为 `{}`。消息带上宿主生成的服务器与工具来源标记，经原有 Pi prompt 路径进入对话并产生回复。
 
