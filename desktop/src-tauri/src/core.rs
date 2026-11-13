@@ -46,6 +46,27 @@ pub struct AppChatBinding {
 }
 
 impl AppChatBinding {
+    pub fn model_context(
+        &self,
+        id: String,
+        source: String,
+        current: impl Fn() -> bool + Send + Sync + 'static,
+    ) -> AppModelContext {
+        let slot = self.core.app_contexts.register(
+            id,
+            source,
+            crate::app_model_context::Scope {
+                generation: self.generation,
+                edit_revision: self.edit_revision,
+                session_id: self.session_id.clone(),
+            },
+            current,
+        );
+        AppModelContext {
+            binding: self.clone(),
+            slot,
+        }
+    }
     pub async fn send(&self, message: String, permit: &AtomicBool) -> Result<()> {
         self.core
             .command_inner(
@@ -56,6 +77,27 @@ impl AppChatBinding {
             )
             .await?;
         Ok(())
+    }
+}
+
+#[derive(Clone)]
+pub struct AppModelContext {
+    binding: AppChatBinding,
+    slot: Arc<crate::app_model_context::Slot>,
+}
+
+impl AppModelContext {
+    pub async fn update(&self, payload: &Value) -> Result<()> {
+        let value = crate::app_model_context::parse(payload)?;
+        let _gate = self.slot.updates.lock().await;
+        if !self.slot.current() {
+            bail!("App 上下文授权已失效");
+        }
+        let core = &self.binding.core;
+        let active = core.current().await?;
+        core.validate_app_binding(&active, &self.binding, false)
+            .await?;
+        self.slot.set(value)
     }
 }
 #[derive(Default, Deserialize)]
@@ -76,6 +118,7 @@ pub struct Core {
     pub closing: AtomicBool,
     generation: AtomicU64,
     edit_revision: AtomicU64,
+    app_contexts: crate::app_model_context::Registry,
     sink: RwLock<Option<EventSink>>,
     dialogs: Mutex<HashMap<String, (u64, Value)>>,
     index: Arc<Mutex<workspace::SessionIndex>>,
@@ -144,6 +187,10 @@ impl Core {
             include_str!("../../extensions/desktop-model-policy.mjs"),
         )?;
         fs::write(
+            data_dir.join("desktop-app-context.mjs"),
+            include_str!("../../extensions/desktop-app-context.mjs"),
+        )?;
+        fs::write(
             data_dir.join("desktop-permissions.mjs"),
             include_str!("../../extensions/desktop-permissions.mjs"),
         )?;
@@ -166,6 +213,7 @@ impl Core {
             closing: AtomicBool::new(false),
             generation: AtomicU64::new(0),
             edit_revision: AtomicU64::new(0),
+            app_contexts: crate::app_model_context::Registry::default(),
             sink: RwLock::new(None),
             dialogs: Mutex::new(HashMap::new()),
             index: Arc::new(Mutex::new(workspace::SessionIndex::default())),
@@ -451,6 +499,46 @@ impl Core {
     }
     fn handle_event(self: &Arc<Self>, generation: u64, event: Value) {
         if generation != self.generation.load(Ordering::SeqCst) {
+            return;
+        }
+        if event["type"] == "extension_ui_request"
+            && event["method"] == "input"
+            && event["title"] == "PI_DESKTOP_APP_CONTEXT"
+        {
+            let request = event["placeholder"]
+                .as_str()
+                .filter(|raw| raw.len() <= 4096)
+                .and_then(|raw| serde_json::from_str::<Value>(raw).ok());
+            let core = self.clone();
+            let id = event["id"].clone();
+            tokio::spawn(async move {
+                if let Ok(active) = core.current().await {
+                    if active.generation != generation {
+                        return;
+                    }
+                    let reply = match request {
+                        Some(request)
+                            if request["token"] == core.bridge_token
+                                && request["sessionId"].is_string() =>
+                        {
+                            let contexts = core.app_contexts.snapshot(
+                                generation,
+                                core.edit_revision.load(Ordering::SeqCst),
+                                request["sessionId"].as_str().unwrap(),
+                            );
+                            json!({"type":"extension_ui_response","id":id,"value":json!({"contexts":contexts}).to_string()})
+                        }
+                        _ => json!({"type":"extension_ui_response","id":id,"cancelled":true}),
+                    };
+                    let _ = active
+                        .rpc
+                        .write_guarded(reply, || {
+                            core.generation.load(Ordering::SeqCst) == generation
+                                && !core.closing.load(Ordering::SeqCst)
+                        })
+                        .await;
+                }
+            });
             return;
         }
         if matches!(
@@ -834,6 +922,36 @@ impl Core {
         })
     }
 
+    async fn validate_app_binding(
+        &self,
+        active: &Active,
+        binding: &AppChatBinding,
+        idle: bool,
+    ) -> Result<()> {
+        if self.connecting.load(Ordering::SeqCst) || self.closing.load(Ordering::SeqCst) {
+            bail!("Pi 正在连接或关闭");
+        }
+        let state = active.rpc.call("get_state", json!({})).await?;
+        if binding.generation != active.generation
+            || binding.generation != self.generation.load(Ordering::SeqCst)
+            || binding.edit_revision != self.edit_revision.load(Ordering::SeqCst)
+        {
+            bail!("App 绑定的 Pi 对话已变更，请重新打开 App");
+        }
+        if state["sessionId"] != binding.session_id {
+            bail!("App 绑定的 Pi 会话已切换，请重新打开 App");
+        }
+        if idle
+            && (active.rpc.busy.load(Ordering::SeqCst)
+                || state["isStreaming"] == true
+                || state["isCompacting"] == true
+                || state["pendingMessageCount"].as_u64().unwrap_or_default() > 0)
+        {
+            bail!("Pi 正在运行，请等待当前任务完成");
+        }
+        Ok(())
+    }
+
     pub async fn command(&self, kind: &str, data: Value) -> Result<Value> {
         self.command_inner(kind, data, None, None).await
     }
@@ -870,22 +988,7 @@ impl Core {
         };
         let active = self.current().await?;
         if let Some(binding) = binding {
-            if binding.generation != active.generation
-                || binding.edit_revision != self.edit_revision.load(Ordering::SeqCst)
-            {
-                bail!("App 绑定的 Pi 对话已变更，请重新打开 App");
-            }
-            let state = active.rpc.call("get_state", json!({})).await?;
-            if state["sessionId"] != binding.session_id {
-                bail!("App 绑定的 Pi 会话已切换，请重新打开 App");
-            }
-            if active.rpc.busy.load(Ordering::SeqCst)
-                || state["isStreaming"] == true
-                || state["isCompacting"] == true
-                || state["pendingMessageCount"].as_u64().unwrap_or_default() > 0
-            {
-                bail!("Pi 正在运行，请等待当前任务完成");
-            }
+            self.validate_app_binding(&active, binding, true).await?;
         }
         if let Some(expected) = data.as_object_mut().and_then(|data| {
             if kind == "set_fast_mode" {

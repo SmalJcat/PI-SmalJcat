@@ -3,9 +3,11 @@ import { SettingsManager, getAgentDir } from '@earendil-works/pi-coding-agent';
 import { Type } from '@sinclair/typebox';
 import desktopPermissions from './desktop-permissions.mjs';
 import desktopModelPolicy, { pendingEdit } from './desktop-model-policy.mjs';
+import desktopAppContext from './desktop-app-context.mjs';
 
 export default function desktopContext(pi) {
   desktopPermissions(pi);
+  desktopAppContext(pi);
   const modelPolicy = desktopModelPolicy(pi);
   const reportUsage = (_event, ctx) => {
     try {

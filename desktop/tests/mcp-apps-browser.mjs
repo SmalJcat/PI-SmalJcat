@@ -68,6 +68,20 @@ try {
     role:'user',content:[{type:'text',text:'MCP_APP_CHAT_TEST'}],
   });
   checks.push('对话消息请求、授权拒绝与成功回执转发');
+  await frame.locator('#context-old').click();
+  await frame.locator('#output').filter({hasText:'denied'}).waitFor();
+  await page.evaluate(()=>{window.appHost.allowModelContext=true;});
+  for (const button of ['#context-old','#context-latest']) {
+    await frame.locator(button).click();
+    await frame.locator('#output').filter({hasText:/^\{\}$/}).waitFor();
+  }
+  assert.deepEqual(await page.evaluate(()=>window.appHost.modelContext),{
+    content:[{type:'text',text:'MCP_CONTEXT_LATEST'}],structuredContent:{selection:2,labels:['中文','🙂']},
+  });
+  await frame.locator('#context-clear').click();
+  await frame.locator('#output').filter({hasText:/^\{\}$/}).waitFor();
+  assert.deepEqual(await page.evaluate(()=>window.appHost.modelContext),{});
+  checks.push('上下文更新默认拒绝、最新覆盖与清除请求转发');
   await page.evaluate(()=>{window.appHost.hold=true;});
   await frame.locator('#refresh').click();
   await page.waitForFunction(()=>typeof window.appHost.release==='function');

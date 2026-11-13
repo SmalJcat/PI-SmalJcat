@@ -2,6 +2,7 @@ pub mod agent_history;
 pub mod agent_roles;
 pub mod agents;
 pub mod antigravity;
+mod app_model_context;
 pub mod context;
 pub mod core;
 #[cfg(feature = "desktop")]

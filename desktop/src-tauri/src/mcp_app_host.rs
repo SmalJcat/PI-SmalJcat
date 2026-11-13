@@ -1,6 +1,6 @@
 //! Server-provided MCP Apps, bound to a connection, resource and native window.
 use crate::{
-    core::AppChatBinding,
+    core::{AppChatBinding, AppModelContext},
     mcp_apps::AuditEntry,
     mcp_client::{McpManager, McpSession},
 };
@@ -157,9 +157,16 @@ struct AppState {
     grants: HashSet<String>,
     allow_resources: bool,
     chat: Option<AppChatBinding>,
+    model_context: Option<AppModelContext>,
     pending: HashSet<String>,
     arguments: Value,
     result: Value,
+}
+
+pub struct PiAccess {
+    pub binding: AppChatBinding,
+    pub messages: bool,
+    pub model_context: bool,
 }
 
 struct App {
@@ -280,7 +287,7 @@ impl McpAppHost {
         id: &str,
         grants: &[String],
         allow_resources: bool,
-        chat: Option<AppChatBinding>,
+        pi: Option<PiAccess>,
         arguments: Value,
         result: Value,
     ) -> Result<String> {
@@ -310,7 +317,27 @@ impl McpAppHost {
         }
         state.grants = grants.iter().cloned().collect();
         state.allow_resources = allow_resources;
-        state.chat = chat;
+        if let Some(pi) = pi {
+            if pi.messages {
+                state.chat = Some(pi.binding.clone());
+            }
+            if pi.model_context {
+                let active = app.active.clone();
+                let connection = app.connection.clone();
+                let source = format!(
+                    "{} · {}",
+                    json!(app.connection.name),
+                    json!(app.tool["name"])
+                )
+                .chars()
+                .take(512)
+                .collect();
+                state.model_context =
+                    Some(pi.binding.model_context(app.id.clone(), source, move || {
+                        active.load(Ordering::SeqCst) && connection.connected()
+                    }));
+            }
+        }
         state.arguments = arguments;
         state.result = result;
         app.active.store(true, Ordering::SeqCst);
@@ -452,6 +479,7 @@ impl McpAppHost {
                         | "tools/call"
                         | "resources/read"
                         | "ui/message"
+                        | "ui/update-model-context"
                         | "ping"
                         | "notifications/message"
                         | "ui/notifications/size-changed"
@@ -504,6 +532,9 @@ impl McpAppHost {
                 if state.chat.is_some() {
                     capabilities["message"] = json!({"text":{}});
                 }
+                if state.model_context.is_some() {
+                    capabilities["updateModelContext"] = json!({"text":{},"structuredContent":{}});
+                }
                 Ok((
                     json!({
                         "protocolVersion":UI_VERSION,
@@ -539,6 +570,21 @@ impl McpAppHost {
                 Ok((json!({}), vec![]))
             }
             "ui/request-display-mode" if !notification => Ok((json!({"mode":"inline"}), vec![])),
+            "ui/update-model-context" if !notification => {
+                let context = app
+                    .state
+                    .lock()
+                    .unwrap()
+                    .model_context
+                    .clone()
+                    .context("App 未获授权提供模型上下文")?;
+                let _request = RequestGuard::begin(&app, &message["id"])?;
+                context
+                    .update(&params)
+                    .await
+                    .context("App 上下文更新失败，请查看宿主审计")?;
+                Ok((json!({}), vec![]))
+            }
             "ui/message" if !notification => {
                 let chat = app
                     .state
