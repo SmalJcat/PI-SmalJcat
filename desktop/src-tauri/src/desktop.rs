@@ -563,10 +563,21 @@ async fn dispatch(
                 .map(|value| value.as_bool().context("App 资源授权必须为布尔值"))
                 .transpose()?
                 .unwrap_or(false);
+            let allow_messages = payload
+                .get("allowMessages")
+                .map(|value| value.as_bool().context("App 消息授权必须为布尔值"))
+                .transpose()?
+                .unwrap_or(false);
+            let chat = if allow_messages {
+                Some(core.bind_app_chat().await?)
+            } else {
+                None
+            };
             let label = apps.activate(
                 &id,
                 &grants,
                 allow_resources,
+                chat,
                 payload["arguments"].clone(),
                 payload["result"].clone(),
             )?;

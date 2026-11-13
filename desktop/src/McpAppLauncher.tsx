@@ -7,6 +7,7 @@ export function McpAppLauncher({ name, tool, arguments: args, result, onError }:
   const [prepared, setPrepared] = useState<Wire | null>(null);
   const [grants, setGrants] = useState<string[]>([]);
   const [allowResources, setAllowResources] = useState(false);
+  const [allowMessages, setAllowMessages] = useState(false);
   const [busy, setBusy] = useState(false);
   const [opened, setOpened] = useState(false);
   const mounted = useRef(true);
@@ -31,6 +32,7 @@ export function McpAppLauncher({ name, tool, arguments: args, result, onError }:
       session.current = {id:data.id,retain:false};
       setGrants([]);
       setAllowResources(false);
+      setAllowMessages(false);
       setPrepared(data);
     } catch (error) { if (mounted.current) onError(error); }
     finally { if (mounted.current) setBusy(false); }
@@ -40,7 +42,7 @@ export function McpAppLauncher({ name, tool, arguments: args, result, onError }:
     setBusy(true);
     session.current.retain = true;
     try {
-      await window.pi.mcpAppOpen({id:prepared.id,grantedTools:grants,allowResources,arguments:args,result});
+      await window.pi.mcpAppOpen({id:prepared.id,grantedTools:grants,allowResources,allowMessages,arguments:args,result});
       if (mounted.current) setOpened(true);
     } catch (error) {
       session.current.retain = false;
@@ -69,6 +71,11 @@ export function McpAppLauncher({ name, tool, arguments: args, result, onError }:
       <span>允许 App 读取此服务器的资源<small>此窗口可请求该服务器提供的任意资源 URI。</small></span>
     </label>
     <p className="setting-help">仅勾选的工具可由此 App 调用。内容由上述服务器提供。</p>
+    <label className="widget-grant">
+      <input type="checkbox" checked={allowMessages} disabled={busy || opened}
+        onChange={event => setAllowMessages(event.target.checked)} />
+      <span>允许 App 向此 Pi 对话发送消息<small>绑定打开时的对话，发送会触发 Pi 回复，可能产生模型费用。</small></span>
+    </label>
     <div className="settings-actions">
       <button className="primary-button" disabled={busy || opened} onClick={() => void open()}>
         {opened ? 'App 已打开' : '打开独立窗口'}

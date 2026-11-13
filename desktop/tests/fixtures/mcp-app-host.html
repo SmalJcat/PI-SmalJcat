@@ -4,7 +4,7 @@
 <body><div id="root"></div>
 <script type="module">
 import { mountMcpApp } from '/src/mcp-app-frame.mjs';
-window.appHost = {calls:[],allow:false,allowResources:false,hold:false};
+window.appHost = {calls:[],allow:false,allowResources:false,allowMessages:false,hold:false};
 const rpc = async raw => {
   const message = JSON.parse(raw);
   window.appHost.calls.push(message);
@@ -16,6 +16,7 @@ const rpc = async raw => {
   ]};
   if (window.appHost.hold) await new Promise(resolve => { window.appHost.release=resolve; });
   if (message.method === 'tools/call' && window.appHost.allow) return reply({structuredContent:{count:42}});
+  if (message.method === 'ui/message' && window.appHost.allowMessages) return reply({});
   if (message.method === 'resources/read' && window.appHost.allowResources) return reply({contents:[
     message.params.uri === 'fixture://binary'
       ? {uri:message.params.uri,mimeType:'application/octet-stream',blob:'AAEC'}

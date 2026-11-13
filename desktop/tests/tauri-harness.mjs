@@ -26,7 +26,7 @@ export async function webviewDebugEndpoint(directory, timeout = 20000) {
         const value = await readFile(path.join(directory, relative), 'utf8');
         const port = Number(value.split('\n')[0].trim());
         if (Number.isInteger(port) && port > 0 && port < 65536) return 'http://127.0.0.1:' + port;
-      } catch (error) { if (error.code !== 'ENOENT') throw error; }
+      } catch (error) { if (!['ENOENT','EBUSY'].includes(error.code)) throw error; }
     }
     await delay(100);
   }

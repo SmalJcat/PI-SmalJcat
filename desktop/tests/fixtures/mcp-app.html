@@ -11,6 +11,7 @@
 <button id="unsupported">请求宿主文件</button>
 <button id="read-resource">读取服务器资源</button>
 <button id="read-blob">读取二进制资源</button>
+<button id="send-message">发送到 Pi 对话</button>
 <pre id="capabilities"></pre>
 <pre id="output"></pre>
 <pre id="isolation"></pre>
@@ -51,6 +52,9 @@ document.getElementById('denied').onclick = () => run('tools/call', {name:'echo'
 document.getElementById('unsupported').onclick = () => run('host/read-file', {path:'private'});
 document.getElementById('read-resource').onclick = () => run('resources/read', {uri:'fixture://hello'});
 document.getElementById('read-blob').onclick = () => run('resources/read', {uri:'fixture://binary'});
+document.getElementById('send-message').onclick = () => run('ui/message', {
+  role:'user',content:[{type:'text',text:'MCP_APP_CHAT_TEST'}],
+});
 try {
   window.parent.document.title;
   document.getElementById('isolation').textContent = 'parent-accessible';

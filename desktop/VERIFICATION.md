@@ -1,5 +1,17 @@
 # Pi Desktop 发布验收
 
+## 0.7.1 MCP Apps 对话消息交付（2026-11-13）
+
+- `codex/mcp-app-chat` 新增默认关闭的 allowMessages 授权。获准后接收标准 user 文本块数组及稳定版示例中的单对象，声明 message.text 能力，带宿主生成的服务器/工具来源进入原 Pi prompt 路径。绑定打开时的 Pi 连接、会话和编辑代次，忙时拒绝排队，切换、重连或编辑后需重新打开 App。[PR #6](https://github.com/SmalJcat/PI-SmalJcat/pull/6)
+- 发送复用普通 prompt 的操作锁、会话保护和工具权限，Pi 串行写入前重新检查 App 关闭许可，底层诊断仅进入宿主审计。主输入框草稿保持独立。三项只读复核覆盖 Core/RPC、窗口授权和验收脚本。
+- JavaScript 124、常规 Rust 176、fixture Rust 179 项通过，各 Rust 模式 4 项真实环境检查默认忽略。生产构建、格式与严格全目标 Clippy 通过，App 浏览器 6 类通过。定向 App 8 项及排队消息许可专项验证格式、默认拒绝、文本来源、忙时拒绝、编辑/重连/同进程换会话后的失效，以及关闭前的许可撤销。
+- 14:19 HKT，真实 Tauri/WebView2 全量 73 项通过，渲染错误 0，fixture 模型请求 0。debug 程序 SHA-256 为 `5daaa4715a533a2c06172d4b503a0b7939bd77bba85c8381d740466b23e5afb6`。另以真实 Pi、隔离配置和本机 OpenAI 兼容提供方完成 App 专项 8 项，实际本机提供方请求 1 次，提供方为 app-chat-local。
+- 回执的 localProviderRequests 来自本机 HTTP 服务计数，modelRequestScope 为 loopback-provider。外部请求数量未经独立网络观测，记录为 null。普通真实配置的 Pi/ACP 元数据验收另行执行。
+- 验收期间修正了测试使用的历史条目字段、异步快照等待、WebView2 端口文件短暂 EBUSY 重试，以及临时会话目录对正文索引的影响。失败日志/回执保留，完整重跑已通过。证据为 `artifacts/app-chat-{host,host-retry,queued,build,browser,js}.log`、`app-chat-full-*.log`、`app-chat-native-target-result.json`、`app-chat-real-pi-result.json`、`app-chat-full-ui-result.json` 及 `app-chat-native-first-failure.json`、`app-chat-native-startup-failure.json`、`app-chat-full-ui-first-failure.json`。
+- 14:24 HKT，从干净提交 `1b83dd8052aa8082bbbeb85f4dbcbe7f0fa068be` 构建正式程序，版本 0.7.1，18,162,688 字节，SHA-256 为 `a81dd2906559fb39e4cecc299e4522374177cf37e3abd40419353a9ec5150e33`。146 个文件的源码指纹为 `aaad4db91b38f718f653a7e9a06096529ad428cd2166fef4f1da03e45b7af9dc`。
+- 同一正式程序通过普通真实 Pi/官方 ACP 元数据 6 项及 App 专项 8 项检查，渲染错误 0。前者模型请求 0，后者使用隔离的 app-chat-local 提供方，本机服务计数 1 次，覆盖实际 ui/message、Pi 回复、来源及草稿保留。已查看正式程序截图 `mcp-app-chat-transcript.png`。
+- 14:25 HKT，经既有部署工具更新 `%LOCALAPPDATA%\Programs\Pi Desktop\fdea6c4`，旧版保留为 `fdea6c4.backup-2026-11-13T06-25-54-839Z-6ea44c95`。安装和暂存程序的清单、大小、哈希及源码指纹核对一致。证据为 `app-chat-package-result.json`、`app-chat-release-acp-result.json`、`app-chat-release-apps-result.json`、`app-chat-deploy.log` 与 `app-chat-release-integrity.json`。后续交付文档更新属于源码指纹排除范围。
+
 ## 0.7.1 MCP Apps 资源读取交付（2026-11-13）
 
 - `codex/mcp-app-resources` 为 App 增加标准 resources/read 代理。打开前的资源授权默认关闭，勾选后允许读取原 MCP 连接提供的任意资源 URI，初始化响应据此声明 serverResources。省略 allowResources 的旧调用继续使用默认值。[PR #5](https://github.com/SmalJcat/PI-SmalJcat/pull/5)

@@ -37,6 +37,27 @@ pub struct Active {
     pub cwd: PathBuf,
     pub generation: u64,
 }
+#[derive(Clone)]
+pub struct AppChatBinding {
+    core: Arc<Core>,
+    generation: u64,
+    edit_revision: u64,
+    session_id: String,
+}
+
+impl AppChatBinding {
+    pub async fn send(&self, message: String, permit: &AtomicBool) -> Result<()> {
+        self.core
+            .command_inner(
+                "prompt",
+                json!({"message":message}),
+                Some(self),
+                Some(permit),
+            )
+            .await?;
+        Ok(())
+    }
+}
 #[derive(Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ConnectOptions {
@@ -54,6 +75,7 @@ pub struct Core {
     pub connecting: AtomicBool,
     pub closing: AtomicBool,
     generation: AtomicU64,
+    edit_revision: AtomicU64,
     sink: RwLock<Option<EventSink>>,
     dialogs: Mutex<HashMap<String, (u64, Value)>>,
     index: Arc<Mutex<workspace::SessionIndex>>,
@@ -143,6 +165,7 @@ impl Core {
             connecting: AtomicBool::new(false),
             closing: AtomicBool::new(false),
             generation: AtomicU64::new(0),
+            edit_revision: AtomicU64::new(0),
             sink: RwLock::new(None),
             dialogs: Mutex::new(HashMap::new()),
             index: Arc::new(Mutex::new(workspace::SessionIndex::default())),
@@ -759,6 +782,7 @@ impl Core {
             if edited["cancelled"] == true {
                 return Ok(json!({"cancelled":true}));
             }
+            self.edit_revision.fetch_add(1, Ordering::SeqCst);
             *self.context_usage_cache.lock().unwrap() = None;
             let snapshot = self.snapshot_active(&active).await?;
             let file = PathBuf::from(
@@ -790,7 +814,37 @@ impl Core {
         }
         result
     }
-    pub async fn command(&self, kind: &str, mut data: Value) -> Result<Value> {
+    pub async fn bind_app_chat(self: &Arc<Self>) -> Result<AppChatBinding> {
+        if self.connecting.load(Ordering::SeqCst) || self.closing.load(Ordering::SeqCst) {
+            bail!("Pi 正在连接或关闭");
+        }
+        let _gate = self.operation.try_lock().context("上一个操作仍在处理中")?;
+        let active = self.current().await?;
+        let state = active.rpc.call("get_state", json!({})).await?;
+        let session_id = state["sessionId"]
+            .as_str()
+            .filter(|id| !id.is_empty())
+            .context("Pi 未返回当前会话 ID")?
+            .to_owned();
+        Ok(AppChatBinding {
+            core: self.clone(),
+            generation: active.generation,
+            edit_revision: self.edit_revision.load(Ordering::SeqCst),
+            session_id,
+        })
+    }
+
+    pub async fn command(&self, kind: &str, data: Value) -> Result<Value> {
+        self.command_inner(kind, data, None, None).await
+    }
+
+    async fn command_inner(
+        &self,
+        kind: &str,
+        mut data: Value,
+        binding: Option<&AppChatBinding>,
+        permit: Option<&AtomicBool>,
+    ) -> Result<Value> {
         if ![
             "prompt",
             "abort",
@@ -815,6 +869,24 @@ impl Core {
             Some(self.operation.try_lock().context("上一个操作仍在处理中")?)
         };
         let active = self.current().await?;
+        if let Some(binding) = binding {
+            if binding.generation != active.generation
+                || binding.edit_revision != self.edit_revision.load(Ordering::SeqCst)
+            {
+                bail!("App 绑定的 Pi 对话已变更，请重新打开 App");
+            }
+            let state = active.rpc.call("get_state", json!({})).await?;
+            if state["sessionId"] != binding.session_id {
+                bail!("App 绑定的 Pi 会话已切换，请重新打开 App");
+            }
+            if active.rpc.busy.load(Ordering::SeqCst)
+                || state["isStreaming"] == true
+                || state["isCompacting"] == true
+                || state["pendingMessageCount"].as_u64().unwrap_or_default() > 0
+            {
+                bail!("Pi 正在运行，请等待当前任务完成");
+            }
+        }
         if let Some(expected) = data.as_object_mut().and_then(|data| {
             if kind == "set_fast_mode" {
                 data.get("expectedSessionId").cloned()
@@ -880,7 +952,10 @@ impl Core {
             }
             return result;
         }
-        let result = active.rpc.request(kind, data, duration).await;
+        let result = active
+            .rpc
+            .request_guarded(kind, data, duration, permit)
+            .await;
         if result.is_ok() && kind == "set_model" {
             if let Ok(settings) = self.query_context_settings(&active, "get").await {
                 *self.context_settings.lock().unwrap() = Some(settings);
