@@ -2,6 +2,7 @@ param(
   [ValidateSet('ui','real','release')][string]$Mode = 'ui',
   [switch]$Child,
   [switch]$Antigravity,
+  [switch]$AppsOnly,
   [string]$LogPath
 )
 $ErrorActionPreference = 'Stop'
@@ -17,6 +18,7 @@ if ($Child) {
     if ($Mode -eq 'real') { $nodeArgs += '--real' }
     if ($Mode -eq 'release') { $nodeArgs += '--release' }
     if ($Antigravity) { $nodeArgs += '--antigravity' }
+    if ($AppsOnly) { $nodeArgs += '--apps-only' }
     $stdout = $LogPath + '.out'
     $stderr = $LogPath + '.err'
     $process = Start-Process -FilePath $node -ArgumentList $nodeArgs -WorkingDirectory $root -Wait -PassThru -NoNewWindow -RedirectStandardOutput $stdout -RedirectStandardError $stderr
@@ -55,6 +57,7 @@ $action = $definition.Actions.Create(0)
 $action.Path = $testShell
 $action.Arguments = '-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $scriptPath + '" -Child -Mode ' + $Mode + ' -LogPath "' + $log + '"'
 if ($Antigravity) { $action.Arguments += ' -Antigravity' }
+if ($AppsOnly) { $action.Arguments += ' -AppsOnly' }
 $registered = $false
 $completed = $false
 try {

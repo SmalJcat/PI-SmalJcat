@@ -31,6 +31,7 @@
     "test:agents:browser": "node tests/agents-browser.mjs",
     "test:sidebar": "node tests/sidebar-ui.mjs",
     "test:mcp:browser": "node tests/mcp-content-browser.mjs",
+    "test:mcp-apps:browser": "node tests/mcp-apps-browser.mjs",
     "release:keygen": "node scripts/release.mjs keygen",
     "release:sign": "node scripts/release.mjs sign",
     "release:verify": "node scripts/release.mjs verify",

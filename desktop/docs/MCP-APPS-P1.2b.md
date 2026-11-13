@@ -1,5 +1,7 @@
 # MCP Apps 沙箱宿主 P1.2b（0.4.1 增量）
 
+2026-11-13 的开发分支新增真实服务器资源宿主，使用标准 MCP Apps postMessage 协议、HTML 资源与实际工具调用。当前契约见 [MCP Apps 宿主](MCP-APPS-HOST.md)。本文件保留早期内置演示的设计与验证过程。
+
 路线图《Pi Desktop → ChatGPT 级桌面端》的 P1.2b：让 MCP 服务器提供的 widget **能显示但碰不到宿主能力**。宿主只暴露一份固定白名单，默认拒绝，逐项授权。
 
 ## 为什么不是 iframe

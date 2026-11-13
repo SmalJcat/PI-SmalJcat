@@ -1,5 +1,16 @@
 # Pi Desktop 发布验收
 
+## 开发分支：服务器 MCP Apps 宿主（2026-11-13）
+
+- 分支 codex/mcp-apps-host 按稳定版 2026-01-26 MCP Apps 接入，先发布 IPC 契约，再实现资源宿主、窗口与实际工具代理。[PR #4](https://github.com/SmalJcat/PI-SmalJcat/pull/4)
+- 保留工具关联元数据，初始化声明 UI 扩展能力，按关联 URI 读取 text/html;profile=mcp-app 的 text/blob。独立 WebView 的沙箱 iframe 仅启用脚本，资源由校验窗口标签及会话 ID 的协议提供，CSP 来源经过类型、来源和控制字符校验及国际域名规范化。
+- 工具逐项授权默认空，代理绑定原 MCP 连接并重新核对 App 可见性，关闭时撤销未提交请求的许可。stdio 写入与响应共享请求期限，部分写入超时关闭连接，断开可中断阻塞写入。工具传输的底层诊断链留在宿主审计，App 获得安全错误。
+- JS 124 项、生产构建、侧栏 18 类、MCP 内容浏览器 4 类及 App 浏览器 4 类通过。普通 Rust 172 项、fixture Rust 174 项通过，各有 4 项真实环境检查默认忽略。格式检查与全目标严格 Clippy 通过。本机 HTTP 回环测试使用本轮进程的 NO_PROXY。
+- 11:41 HKT，真实 Tauri/WebView2 + Pi/ACP/MCP fixture 71 项通过，渲染错误 0、模型请求 0。新增覆盖服务器 HTML、初始化输入/结果顺序、授权前后实际调用、iframe 来源与主窗 IPC 隔离、断线/关闭/审计，以及旧演示原生 IPC。debug 程序 SHA-256 为 52f4c31c4c97d9e87187090c2d8f1e7476ee6f285d08db73b251f6cb2e31a1a9。
+- 原生调试按各隔离 WebView 的 DevToolsActivePort 连接动态端口。Windows 移除前端未使用的 JS path 插件以修复其子框架初始化异常，Rust 路径解析及原有文件/会话界面已随完整原生回归验证。独立只读复核未发现遗留的可重现代码问题。
+- 证据为 artifacts/mcp-apps-verified-checks.json、mcp-apps-verified-*.log、mcp-apps-host-final.log、mcp-apps/result.json 及 tauri-ui-result.json，界面截图为 mcp-app-grants.png、mcp-app-window.png、mcp-app-rejections.png。写入超时与诊断泄漏的修复前失败回归分别保留为 mcp-apps-write-timeout-before.log、mcp-apps-diagnostics-before.log。测试使用隔离 stdio/loopback HTTP 服务。
+- 当前入口在桌面 MCP 调试区，支持握手、工具输入/结果、授权后的同连接工具调用、日志及固定窗口显示模式。第三方远端 App/TLS/代理、聊天自动挂载、资源读取代理及消息/上下文协作的验证与扩展列入后续工作。[宿主契约](docs/MCP-APPS-HOST.md)
+
 ## 0.7.1 MCP 内容、编辑重发与 Fast 正式交付（2026-11-12，11 月 13 日补记）
 
 - 正式包包含 `2056780` 的 MCP resources/prompts 与 CI 增量，以及 `e29c52f` 的编辑重发预检与 Fast。后者对应的远端 Windows Actions 已通过。[Windows Actions](https://github.com/SmalJcat/PI-SmalJcat/actions/runs/43164982056)

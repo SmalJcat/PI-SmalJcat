@@ -11,7 +11,7 @@
 
 ## 子窗口接口
 
-新增受窗口标签约束的 `widget_command {operation,payload}`，只允许 `identity`、`invoke`、`app-bootstrap`、`app-rpc`。身份从实际窗口反查，主窗口通用命令仍执行原有 main-only 校验。
+新增受窗口标签约束的 `widget_command {operation,payload}`，只允许 `identity`、`invoke`、`app-bootstrap`、`app-rpc`、`app-close`。最后一项仅关闭调用方自己的 App 窗口。身份从实际窗口反查，主窗口通用命令仍执行原有 main-only 校验。
 
 `app-bootstrap` 返回展示来源与本窗口专属资源 URL。`app-rpc {message}` 接收标准 JSON-RPC 文本，返回 `{response,notifications}`。支持 `ui/initialize`、`ui/notifications/initialized`、`ping`、授权后的同连接 `tools/call`、日志和固定窗口显示模式。未实现的方法返回协议错误。
 
@@ -21,7 +21,19 @@ App 完成初始化通知后，宿主依序发送 `ui/notifications/tool-input` 
 
 资源以独立自定义协议提供，按请求窗口与会话 ID 校验。CSP 按资源声明的来源构建，缺省禁止外部网络及嵌套框架；iframe 仅启用脚本。来源与申请的网络域展示在授权界面。预备会话、打开窗口、消息和 HTML 大小均有边界。
 
-窗口关闭释放会话与授权，迟到响应不再转发到已关闭页面。旧内置演示保留回归覆盖，并修正其原生 IPC 接线。
+HTML 支持 UTF-8 text 与 base64 blob，上限 2 MiB。来源只接受合法的 HTTP(S) origin，网络连接还可声明 WS(S)，拒绝凭据、路径、控制字符及 CSP 指令注入，并规范化国际域名。每个 App 最多 16 项在途调用，预备会话五分钟过期，总会话数上限 24。工具目录保留完整 schema，App 调用时重新核对服务端可见性。
+
+Windows 启动时移除前端未使用的 Tauri JS path 插件，避免 WebView2 把其初始化脚本注入非特权子框架时产生异常。Rust 路径解析使用已注册的 PathResolver，文件、进程与主窗口命令继续通过原有原生接口验证。原生回归覆盖旧 widget IPC 与路径诊断。
+
+独立 App 窗口在 MCP 面板关闭后可继续使用，从自身关闭按钮或原生窗口关闭均释放会话与授权。未提交的排队调用在传输写入或启动 HTTP 请求之前再次校验授权是否仍有效，已提交的调用可能完成，迟到响应不再转发到已关闭页面。宿主在关闭时尽力执行资源 teardown。旧内置演示保留回归覆盖，并修正其原生 IPC 接线。
+
+stdio 的请求期限同时覆盖写入与响应。写入超时关闭可能只写了一部分的连接，断开先结束子进程以中断阻塞写入，后续显式用户操作可建立新连接。App 会话始终绑定原连接。
+
+工具传输失败向 App 返回安全错误，底层 stderr 与异常链仅保留在主窗口可读的宿主审计中，避免把宿主诊断信息交给服务器 HTML。
+
+## 当前能力边界
+
+入口位于桌面 MCP 调试区，调用带“App 界面”的工具后打开资源授权面板。App 当前可用初始化、ping、日志、固定窗口模式及授权后的 tools/call。资源读取代理、聊天消息/上下文更新、外部链接和相机等浏览器权限尚未公开。服务端 HTML 在用户选择打开后加载，按声明的 CSP 来源请求网络。
 
 ## 验收
 

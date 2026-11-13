@@ -54,6 +54,9 @@ jobs:
       - name: MCP content UI regression
         timeout-minutes: 5
         run: npm run test:mcp:browser
+      - name: MCP Apps frame regression
+        timeout-minutes: 5
+        run: npm run test:mcp-apps:browser
       - run: npm run test:rust
       - run: npm run test:rust:fixture
       - name: Check Rust formatting
@@ -68,4 +71,5 @@ jobs:
           path: |
             desktop/artifacts/sidebar
             desktop/artifacts/mcp-content
+            desktop/artifacts/mcp-apps
           if-no-files-found: ignore

@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><title>MCP App contract</title>
+<style>body{font:14px system-ui;padding:12px}pre{white-space:pre-wrap;overflow-wrap:anywhere}button{font:inherit;padding:6px;margin:4px}</style>
+</head>
+<body>
+<h1>服务器提供的 App</h1>
+<pre id="initial">等待工具结果</pre>
+<button id="refresh">刷新服务器数据</button>
+<button id="denied">调用未授权工具</button>
+<button id="unsupported">请求宿主文件</button>
+<pre id="output"></pre>
+<pre id="isolation"></pre>
+<script>
+let sequence = 0;
+const pending = new Map();
+window.mcpAppMessages = [];
+const output = document.getElementById('output');
+const request = (method, params = {}) => new Promise((resolve, reject) => {
+  const id = ++sequence;
+  pending.set(id, {resolve, reject});
+  window.parent.postMessage({jsonrpc:'2.0',id,method,params}, '*');
+});
+window.addEventListener('message', event => {
+  if (event.source !== window.parent) return;
+  const message = event.data;
+  window.mcpAppMessages.push(message);
+  if (message.method === 'ui/resource-teardown') {
+    window.parent.postMessage({jsonrpc:'2.0',id:message.id,result:{}}, '*');
+    return;
+  }
+  if (message.method === 'ui/notifications/tool-result') {
+    document.getElementById('initial').textContent = JSON.stringify(message.params);
+  }
+  const waiter = pending.get(message.id);
+  if (waiter) {
+    pending.delete(message.id);
+    if (message.error) waiter.reject(new Error(message.error.message));
+    else waiter.resolve(message.result);
+  }
+});
+const run = async (method, params) => {
+  try { output.textContent = JSON.stringify(await request(method, params)); }
+  catch (error) { output.textContent = error.message; }
+};
+document.getElementById('refresh').onclick = () => run('tools/call', {name:'app_refresh',arguments:{count:42}});
+document.getElementById('denied').onclick = () => run('tools/call', {name:'echo',arguments:{text:'unauthorized'}});
+document.getElementById('unsupported').onclick = () => run('host/read-file', {path:'private'});
+try {
+  window.parent.document.title;
+  document.getElementById('isolation').textContent = 'parent-accessible';
+} catch {
+  document.getElementById('isolation').textContent = 'parent-isolated';
+}
+request('ui/initialize', {
+  protocolVersion:'2026-01-26',appInfo:{name:'fixture-app',version:'1'},appCapabilities:{},
+}).then(() => {
+  window.parent.postMessage({jsonrpc:'2.0',method:'ui/notifications/initialized',params:{}}, '*');
+}).catch(error => { output.textContent = error.message; });
+</script>
+</body></html>

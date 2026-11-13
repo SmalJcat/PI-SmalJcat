@@ -98,13 +98,23 @@ impl HttpTransport {
         timeout: Duration,
         notify: &Notification,
     ) -> Result<Value> {
+        self.post_guarded(payload, timeout, notify, None).await
+    }
+
+    pub(crate) async fn post_guarded(
+        &self,
+        payload: &Value,
+        timeout: Duration,
+        notify: &Notification,
+        permit: Option<&std::sync::atomic::AtomicBool>,
+    ) -> Result<Value> {
         let mut closed = self.closed.subscribe();
         if *closed.borrow() {
             bail!("MCP HTTP 会话已关闭或过期，请断开后重新连接");
         }
         let result = tokio::select! {
             _ = closed.changed() => bail!("MCP HTTP 会话已关闭或过期，请断开后重新连接"),
-            result = tokio::time::timeout(timeout, self.exchange("POST", Some(payload), notify)) => result.context("MCP HTTP 请求超时")??,
+            result = tokio::time::timeout(timeout, self.exchange_guarded("POST", Some(payload), notify, permit)) => result.context("MCP HTTP 请求超时")??,
         };
         match result {
             Exchange::Response(value) => Ok(value),
@@ -165,6 +175,16 @@ impl HttpTransport {
         payload: Option<&Value>,
         notify: &Notification,
     ) -> Result<Exchange> {
+        self.exchange_guarded(method, payload, notify, None).await
+    }
+
+    async fn exchange_guarded(
+        &self,
+        method: &str,
+        payload: Option<&Value>,
+        notify: &Notification,
+        permit: Option<&std::sync::atomic::AtomicBool>,
+    ) -> Result<Exchange> {
         let mut command = Command::new(crate::update::curl_exe());
         // No curlrc or redirects: session and credential headers stay on this endpoint.
         command.args([
@@ -219,6 +239,9 @@ impl HttpTransport {
             .stderr(Stdio::null())
             .kill_on_drop(true);
         hide_console(&mut command);
+        if permit.is_some_and(|permit| !permit.load(std::sync::atomic::Ordering::SeqCst)) {
+            bail!("App 已关闭");
+        }
         let mut child = command.spawn().context("无法启动 MCP HTTP curl 进程")?;
         let mut stdin = child.stdin.take().context("curl stdin 不可用")?;
         stdin.write_all(config.as_bytes()).await?;

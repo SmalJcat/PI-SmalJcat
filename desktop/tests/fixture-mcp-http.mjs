@@ -1,6 +1,6 @@
 // Loopback-only Streamable HTTP fixture. No model calls or user configuration.
 import http from 'node:http';
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, readFileSync } from 'node:fs';
 const log = process.argv[2];
 const mode = process.argv[3] || 'normal';
 const record = value => appendFileSync(log, JSON.stringify(value) + '\n');
@@ -25,7 +25,7 @@ const server = http.createServer(async (req, res) => {
   if (message.method === 'initialize') {
     if (mode === 'slow') await new Promise(resolve => setTimeout(resolve, 300));
     const headers = mode === 'stateless' ? {} : { 'Mcp-Session-Id': mode === 'bad-session' ? 'invalid session' : 'fixture-session' };
-    const capabilities = mode === 'content-only' ? { resources: {}, prompts: {} } : { tools: { listChanged: true } };
+    const capabilities = mode === 'apps' ? {tools:{},resources:{}} : mode === 'content-only' ? { resources: {}, prompts: {} } : { tools: { listChanged: true } };
     json(res, 200, { jsonrpc: '2.0', id: message.id, result: { protocolVersion: '2025-06-18', serverInfo: { name: 'http-fixture', version: '1' }, capabilities } }, headers);
     return;
   }
@@ -43,6 +43,20 @@ const server = http.createServer(async (req, res) => {
   }
   if (message.method === 'notifications/initialized') {
     res.writeHead(202);res.end();return;
+  }
+  if (mode === 'apps') {
+    const reply = result => json(res, 200, {jsonrpc:'2.0',id:message.id,result});
+    if (message.method === 'tools/list') reply({tools:[
+      {name:'app_view',inputSchema:{type:'object'},_meta:{ui:{resourceUri:'ui://fixture/app'}}},
+      {name:'app_refresh',inputSchema:{type:'object'},_meta:{ui:{visibility:['app']}}},
+      {name:'model_only',inputSchema:{type:'object'},_meta:{ui:{visibility:['model']}}},
+    ]});
+    else if (message.method === 'resources/read') reply({contents:[{uri:message.params.uri,
+      mimeType:'text/html;profile=mcp-app',text:readFileSync(new URL('./fixtures/mcp-app.html',import.meta.url),'utf8')}]});
+    else if (message.method === 'tools/call') reply({content:[{type:'text',text:'HTTP App result'}],
+      structuredContent:{count:message.params.arguments.count || 1}});
+    else json(res,200,{jsonrpc:'2.0',id:message.id,error:{code:-32601,message:'Method unavailable'}});
+    return;
   }
   if (mode === 'content-only') {
     const reply = result => json(res, 200, { jsonrpc: '2.0', id: message.id, result });

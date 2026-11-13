@@ -1,5 +1,7 @@
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
 export async function debugEndpoint() {
@@ -14,6 +16,21 @@ export async function debugEndpoint() {
     url: `http://127.0.0.1:${port}`,
     args: `--remote-debugging-port=${port} --remote-debugging-address=127.0.0.1`,
   };
+}
+
+export async function webviewDebugEndpoint(directory, timeout = 20000) {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    for (const relative of ['DevToolsActivePort', 'EBWebView/DevToolsActivePort']) {
+      try {
+        const value = await readFile(path.join(directory, relative), 'utf8');
+        const port = Number(value.split('\n')[0].trim());
+        if (Number.isInteger(port) && port > 0 && port < 65536) return 'http://127.0.0.1:' + port;
+      } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    }
+    await delay(100);
+  }
+  throw new Error('WebView2 DevToolsActivePort unavailable in ' + directory);
 }
 
 export async function waitForProcessExit(pid, timeout = 5000) {
