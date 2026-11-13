@@ -1,6 +1,6 @@
 # Pi Desktop 开发记录
 
-更新时间：2026-11-11（Asia/Hong_Kong）。当前开发版本：0.7.1。
+更新时间：2026-11-13（Asia/Hong_Kong）。当前版本为 0.7.1，resources/prompts、编辑重发与 Fast 已于 11 月 12 日完成正式包验收并部署。
 
 ## 目录与事实来源
 
@@ -24,7 +24,7 @@
 ## 部分完成与边界
 
 - 扩展：只做 manifest / 签名 / 权限信息检查；不是插件安装或加载系统，不能阻止 Pi 自身加载未签名扩展。
-- MCP：桌面可连接 stdio / HTTP 服务并发现、调用工具；HTTP 复用会话 ID、发送初始化通知、读取 JSON/SSE 响应并维护 GET 通知流，工具列表变更使缓存失效；尚无 resources/prompts 桥接。
+- MCP：桌面可连接 stdio / HTTP 服务并发现、调用工具；HTTP 复用会话 ID、发送初始化通知、读取 JSON/SSE 响应并维护 GET 通知流，工具列表变更使缓存失效。开发分支新增 resources/templates/prompts 分页浏览、资源读取和提示词获取，详见 [内容接口](MCP-CONTENT.md)。
 - MCP Apps：独立 WebView、授权校验和审计已实现；资源仍来自 `fixture_catalog`，能力返回 `mock_result`，不是完整第三方 App 宿主。
 - 命令运行器不支持交互式 PTY；没有浏览器自动化、WebMCP 和 Office/LaTeX 工件系统。
 - 角色工具白名单与 worktree 不是 OS 沙箱。`verifier` 能执行 shell，不能把界面“不可修改文件”理解为操作系统强制只读。
@@ -151,9 +151,26 @@
 - 从干净提交 `fe50b32` 重新打包并通过正式包与官方 ACP 验收，11:40 HKT 部署至原安装入口并重新打开。最终程序 SHA-256 为 `3c12f5a142667bb6ba4244746cbfe3c7492528ceb6c75a9e11549ef6ce8ab0a3`。[PR #2](https://github.com/SmalJcat/PI-SmalJcat/pull/2) 汇总本次集成。
 - 程序来源与验收回执、完整日志位置见 [验收记录](../VERIFICATION.md) 的 2026-11-11 记录。
 
+## 2026-11-12：CI 与 MCP 内容接口
+
+- Windows CI 新增 Playwright Chromium 安装、侧栏专项、MCP 内容浏览器回归，以及 test-fixture Rust 测试；保留普通 Rust 模式，统一设置 loopback NO_PROXY，失败时上传浏览器产物。
+- `mcp-connect` 只握手并返回能力，资源/提示词服务器不再依赖 tools/list。新增资源、资源模板、提示词单页枚举，原样透传游标；资源读取与提示词获取沿用 stdio/HTTP 会话、超时及错误处理。
+- “MCP 连接 → 桌面调试”按能力展示工具、资源和提示词。支持具体 URI、模板提示、必填字符串参数校验、消息角色与资源链接展示；二进制显示类型及大小说明，HTML 保持文本。
+- 资源/提示词目录不缓存，不自动遍历或重放；单页/内容超过 256 KiB 明确报错，避免破坏 URI、游标或 base64。切换面板后忽略旧响应。
+- 新增 stdio/HTTP 协议及浏览器回归，同一交互检查接入真实 WebView2 → Rust → 隔离 stdio fixture。实际执行结果见 [验收记录](../VERIFICATION.md)。
+- 第三方 MCP Apps WebView、OAuth 及远程 TLS/代理兼容验证仍列入后续工作。MCP 内容接口已连同编辑重发与 Fast 于当日 14:30 HKT 完成正式包验收及本机部署，交付以验收记录中的 11 月 12 日构建为准。[正式交付记录](../VERIFICATION.md)
+
+## 2026-11-12：编辑重发与 Fast
+
+- MCP 增量 `2056780` 已推送远端且 Windows Actions 成功。
+- 编辑后首次重发只跳过旧上下文用量触发的发送前阈值压缩。新消息进入分支后阈值保护恢复；manual/overflow 不拦截，不关闭用户全局自动压缩。
+- 模型弹层闪电改为 Fast 开关，适用 OpenAI Responses / Codex Responses / Chat Completions 传输；实际请求写入 priority/default，独立于推理档位，按会话分支/模型保存并支持编辑、重连恢复。服务端可能拒绝或不兑现优先档位，界面提示可能增加费用；Antigravity 暂无已验证接口。
+- JS 124、Rust 167/169、格式/Clippy及原生 WebView2 68项通过；真实 Pi + 本机提供方契约验证编辑重发只有一次请求、Fast载荷、手动压缩及溢出重试，外部模型请求0。详细记录见 [验收](../VERIFICATION.md)、[契约](EDIT-FAST.md)。
+- 14:18 HKT，从干净提交 `e29c52f` 生成正式包。14:30 HKT，真实 Pi / 官方 ACP 6 项验收通过并部署至原安装入口，程序 SHA-256 为 `bf16313f8b2fa463b704dbde6fb83aa0f1d0817c6138206dac74b7fd4865674f`。11 月 13 日已复核暂存程序、安装副本、清单、验收回执及当前源码指纹一致。
+
 ## 后续优先级
 
-1. MCP resources/prompts 与真实资源接入，为 MCP Apps 移除 fixture 铺路。
+1. 在资源读取基础上接入真实 MCP Apps 资源与授权调用，替换演示 catalog/result；补真实远程 MCP 的 TLS/代理兼容验证。
 2. 插件安装/启停与加载前校验，明确与 Pi 原生扩展机制的责任边界。
 3. 交互式 PTY；加强可写/执行型代理的边界、工作树生命周期与审阅合并体验。
 4. 安装器和远端更新端到端验收；面向公开分发时再补代码签名。

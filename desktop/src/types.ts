@@ -83,6 +83,12 @@ export interface PiApi {
   exportSession(): Promise<string | null>;
   diagnostics(): Promise<Wire>;
   mcpServers(): Promise<Wire>;
+  mcpConnect(name: string): Promise<{ server: Wire }>;
+  mcpResources(options: { name: string; cursor?: string }): Promise<Wire>;
+  mcpResourceTemplates(options: { name: string; cursor?: string }): Promise<Wire>;
+  mcpResourceRead(options: { name: string; uri: string }): Promise<Wire>;
+  mcpPrompts(options: { name: string; cursor?: string }): Promise<Wire>;
+  mcpPromptGet(options: { name: string; prompt: string; arguments: Record<string, string> }): Promise<Wire>;
   mcpTools(options: { name: string; refresh?: boolean }): Promise<{ server: Wire; tools: Wire[] }>;
   mcpCall(options: { name: string; tool: string; arguments: Wire }): Promise<Wire>;
   mcpDisconnect(name: string): Promise<{ disconnected: string[] }>;

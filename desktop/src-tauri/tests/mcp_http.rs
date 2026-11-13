@@ -85,6 +85,117 @@ impl Drop for Server {
 }
 
 #[tokio::test]
+async fn http_content_capabilities_paging_and_results_use_the_session() {
+    let server = Server::new("content-only");
+    fs::write(
+        server.root.path().join("mcp.json"),
+        serde_json::to_vec(&json!({"mcpServers":{"content":{"url":server.url,"timeout":5}}}))
+            .unwrap(),
+    )
+    .unwrap();
+    let manager = McpManager::new(server.root.path().to_path_buf());
+    let connected = manager.connect("content").await.unwrap();
+    assert!(connected["server"]["capabilities"].get("tools").is_none());
+    for (kind, field) in [
+        ("resources", "resources"),
+        ("templates", "resourceTemplates"),
+        ("prompts", "prompts"),
+    ] {
+        let page = manager.content_list("content", kind, None).await.unwrap();
+        assert_eq!(page[field].as_array().unwrap().len(), 1);
+        let last = manager
+            .content_list("content", kind, page["nextCursor"].as_str())
+            .await
+            .unwrap();
+        assert!(last.get("nextCursor").is_none());
+    }
+    assert_eq!(
+        manager
+            .read_resource("content", "fixture://hello")
+            .await
+            .unwrap()["result"]["contents"][0]["text"],
+        "你好🙂 HTTP resource"
+    );
+    assert_eq!(
+        manager
+            .read_resource("content", "fixture://binary")
+            .await
+            .unwrap()["result"]["contents"][0]["blob"],
+        "AAEC"
+    );
+    assert_eq!(
+        manager
+            .get_prompt("content", "greet", json!({"name":"世界"}))
+            .await
+            .unwrap()["result"]["messages"][0]["content"]["text"],
+        "Hello 世界"
+    );
+    for uri in [
+        "fixture://missing",
+        "fixture://oversized",
+        "fixture://malformed",
+    ] {
+        assert!(manager.read_resource("content", uri).await.is_err());
+    }
+    assert!(manager
+        .get_prompt("content", "missing", json!({}))
+        .await
+        .is_err());
+    let before = server.records().len();
+    assert!(manager
+        .get_prompt("content", "greet", json!({"name":5}))
+        .await
+        .is_err());
+    assert!(!server.records()[before..]
+        .iter()
+        .any(|r| r["message"]["method"] == "prompts/get"));
+    manager.shutdown().await;
+    let records = server.records();
+    assert!(!records
+        .iter()
+        .any(|r| r["message"]["method"] == "tools/list"));
+    assert_eq!(
+        records
+            .iter()
+            .filter(|r| r["message"]["method"] == "initialize")
+            .count(),
+        1
+    );
+    assert!(records
+        .iter()
+        .any(|r| r["message"]["params"]["cursor"] == "下一页+/="));
+    for record in records.iter().filter(|r| {
+        r["message"]["method"]
+            .as_str()
+            .is_some_and(|m| m.starts_with("resources/") || m.starts_with("prompts/"))
+    }) {
+        assert_eq!(record["headers"]["mcp-session-id"], "fixture-session");
+        assert_eq!(record["headers"]["mcp-protocol-version"], "2025-06-18");
+    }
+}
+
+#[tokio::test]
+async fn unsupported_content_is_rejected_without_sending_a_request() {
+    let server = Server::new("no-get");
+    fs::write(
+        server.root.path().join("mcp.json"),
+        serde_json::to_vec(&json!({"mcpServers":{"tools":{"url":server.url}}})).unwrap(),
+    )
+    .unwrap();
+    let manager = McpManager::new(server.root.path().to_path_buf());
+    let error = manager
+        .content_list("tools", "resources", None)
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("未声明 resources"));
+    manager.shutdown().await;
+    assert!(!server
+        .records()
+        .iter()
+        .any(|r| r["message"]["method"] == "resources/list"));
+}
+
+#[tokio::test]
 async fn http_reuses_session_initializes_and_accepts_multiline_sse_without_eof() {
     let server = Server::new("no-get");
     let session = McpSession::connect(server.config()).await.unwrap();

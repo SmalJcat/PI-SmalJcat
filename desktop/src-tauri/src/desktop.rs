@@ -454,6 +454,41 @@ async fn dispatch(
             )
             .await
         }
+        "mcp-resources" | "mcp-resource-templates" | "mcp-prompts" => {
+            let kind = match operation {
+                "mcp-resources" => "resources",
+                "mcp-resource-templates" => "templates",
+                _ => "prompts",
+            };
+            let cursor = match payload.get("cursor") {
+                Some(value) => Some(value.as_str().context("游标必须是字符串")?),
+                None => None,
+            };
+            mcp.content_list(
+                payload["name"].as_str().context("缺少服务器名")?,
+                kind,
+                cursor,
+            )
+            .await
+        }
+        "mcp-resource-read" => {
+            mcp.read_resource(
+                payload["name"].as_str().context("缺少服务器名")?,
+                payload["uri"].as_str().context("缺少资源 URI")?,
+            )
+            .await
+        }
+        "mcp-prompt-get" => {
+            mcp.get_prompt(
+                payload["name"].as_str().context("缺少服务器名")?,
+                payload["prompt"].as_str().context("缺少提示词名称")?,
+                payload
+                    .get("arguments")
+                    .cloned()
+                    .unwrap_or_else(|| json!({})),
+            )
+            .await
+        }
         "mcp-disconnect" => Ok(mcp
             .disconnect(payload["name"].as_str().unwrap_or("*"))
             .await),

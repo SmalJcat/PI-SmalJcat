@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ChevronDown, ChevronRight, Plug, RefreshCw, Unplug, Zap } from './icons';
 import type { Wire } from './types';
+import { McpContentPanel } from './McpContentPanel';
 import {
   callTone,
   defaultArgumentsFor,
@@ -26,6 +27,8 @@ export function McpToolsPanel({ onError }: { onError: (error: unknown) => void }
   const [result, setResult] = useState<{ isError: boolean; text: string } | null>(null);
   const [open, setOpen] = useState<Record<string, boolean>>({});
   const [busy, setBusy] = useState('');
+  const [capabilities, setCapabilities] = useState<Wire>({});
+  const [tab, setTab] = useState('tools');
 
   const refresh = useCallback(async () => {
     try {
@@ -43,12 +46,22 @@ export function McpToolsPanel({ onError }: { onError: (error: unknown) => void }
   const connect = useCallback(async (name: string, force = false) => {
     setBusy(name);
     try {
-      const data = await window.pi.mcpTools({ name, refresh: force });
+      const connection = await window.pi.mcpConnect(name);
+      const caps = connection.server.capabilities || {};
       setActive(name);
-      setTools(data.tools || []);
+      setCapabilities(caps);
+      setTab(caps.tools ? 'tools' : caps.resources ? 'resources' : 'prompts');
+      setTools([]);
       setTool(null);
       setResult(null);
+      setQuery('');
       setOpen(current => ({ ...current, [name]: true }));
+      if (caps.tools) {
+        try {
+          const data = await window.pi.mcpTools({ name, refresh: force });
+          setTools(data.tools || []);
+        } catch (error) { onError(error); }
+      }
       await refresh();
     } catch (error) {
       onError(error);
@@ -105,7 +118,7 @@ export function McpToolsPanel({ onError }: { onError: (error: unknown) => void }
   return (
     <section className="update-card mcp-tools-card">
       <div className="update-head">
-        <strong>桌面工具调试</strong>
+        <strong>桌面 MCP 调试</strong>
         <span className={`update-chip ${servers.some(server => server.connected) ? 'ok' : 'idle'}`}>
           {servers.filter(server => server.connected).length}/{servers.length} 已连接
         </span>
@@ -149,7 +162,7 @@ export function McpToolsPanel({ onError }: { onError: (error: unknown) => void }
                   disabled={Boolean(busy) || server.transport === 'invalid' || server.enabled === false}
                   onClick={() => void connect(server.name, connected)}
                 >
-                  <Plug size={14} /> {connected ? '刷新工具' : '连接'}
+                  <Plug size={14} /> {connected ? '刷新连接' : '连接'}
                 </button>
                 <button
                   className="secondary-button"
@@ -163,11 +176,19 @@ export function McpToolsPanel({ onError }: { onError: (error: unknown) => void }
                   disabled={!connected}
                   onClick={() => setOpen(current => ({ ...current, [server.name]: !current[server.name] }))}
                 >
-                  {open[server.name] ? <ChevronDown size={14} /> : <ChevronRight size={14} />} 工具列表
+                  {open[server.name] ? <ChevronDown size={14} /> : <ChevronRight size={14} />} 浏览能力
                 </button>
               </div>
               {connected && open[server.name] && (
                 <div className="mcp-tools">
+                  <div className="settings-actions" role="group" aria-label="MCP 能力">
+                    {[['tools', '工具'], ['resources', '资源'], ['prompts', '提示词']].filter(([key]) => capabilities[key]).map(([key, label]) => (
+                      <button key={key} className="secondary-button" aria-pressed={tab === key} disabled={Boolean(busy)} onClick={() => setTab(key)}>{label}</button>
+                    ))}
+                  </div>
+                  {!capabilities.tools && !capabilities.resources && !capabilities.prompts && <p className="setting-help">服务器未声明工具、资源或提示词能力。</p>}
+                  {tab !== 'tools' && capabilities[tab] && <McpContentPanel key={`${active}:${tab}`} name={active} kind={tab as 'resources' | 'prompts'} onError={onError} />}
+                  {tab === 'tools' && <>
                   <input
                     className="extensions-filter"
                     value={query}
@@ -181,6 +202,7 @@ export function McpToolsPanel({ onError }: { onError: (error: unknown) => void }
                         <button
                           type="button"
                           className={`mcp-tool ${tool?.name === item.name ? 'selected' : ''}`}
+                          disabled={Boolean(busy)}
                           onClick={() => selectTool(item)}
                         >
                           <strong>{item.name}</strong>
@@ -223,6 +245,7 @@ export function McpToolsPanel({ onError }: { onError: (error: unknown) => void }
                       )}
                     </div>
                   )}
+                  </>}
                 </div>
               )}
             </li>

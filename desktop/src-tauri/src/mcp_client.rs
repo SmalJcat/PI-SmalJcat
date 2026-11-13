@@ -291,6 +291,7 @@ pub struct McpSession {
     next_id: AtomicU64,
     stderr: Mutex<String>,
     config: ServerConfig,
+    capabilities: Mutex<Value>,
 }
 
 impl Drop for McpSession {
@@ -349,6 +350,7 @@ impl McpSession {
             pending: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),
             stderr: Mutex::new(String::new()),
+            capabilities: Mutex::new(json!({})),
             config,
         });
 
@@ -428,6 +430,7 @@ impl McpSession {
             .unwrap_or(PROTOCOL_VERSION)
             .to_owned();
         session.set_handshake(info, protocol);
+        *session.capabilities.lock().unwrap() = response["capabilities"].clone();
         Ok(session)
     }
 
@@ -470,6 +473,7 @@ impl McpSession {
             pending: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),
             stderr: Mutex::new(String::new()),
+            capabilities: Mutex::new(json!({})),
             config,
         });
         let response = session
@@ -490,6 +494,7 @@ impl McpSession {
                 .unwrap_or(PROTOCOL_VERSION)
                 .to_owned(),
         );
+        *session.capabilities.lock().unwrap() = response["capabilities"].clone();
         http.set_protocol(&session.protocol())?;
         http.post(
             &json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
@@ -627,6 +632,25 @@ impl McpSession {
         Ok(bound_result(result))
     }
 
+    async fn content_request(
+        &self,
+        capability: &str,
+        method: &str,
+        params: Value,
+    ) -> Result<Value> {
+        if !self.capabilities.lock().unwrap()[capability].is_object() {
+            bail!("服务器未声明 {capability} 能力");
+        }
+        let result = self
+            .request(method, params, self.config.tool_timeout())
+            .await?;
+        // 不截断结构化内容：URI、分页游标和 base64 都必须保持完整。
+        if serde_json::to_vec(&result)?.len() > MAX_RESULT {
+            bail!("{method} 结果超过 256 KiB 展示上限，请缩小资源或目录页");
+        }
+        Ok(result)
+    }
+
     /// 关闭连接并等待子进程退出。
     pub async fn shutdown(&self) {
         if let Some(http) = &self.http {
@@ -653,6 +677,7 @@ impl McpSession {
             "connected": self.connected(),
             "serverInfo": self.server_info(),
             "protocolVersion": self.protocol(),
+            "capabilities": self.capabilities.lock().unwrap().clone(),
             "toolCount": self.tools.try_lock().map(|value| value.1.len()).unwrap_or(0),
         })
     }
@@ -736,6 +761,7 @@ impl McpManager {
                     Some(session) => {
                         server["connected"] = json!(session.connected());
                         server["serverInfo"] = session.server_info();
+                        server["capabilities"] = session.capabilities.lock().unwrap().clone();
                         server["toolCount"] = json!(session
                             .tools
                             .try_lock()
@@ -775,11 +801,10 @@ impl McpManager {
         Ok(session)
     }
 
-    /// 连接（已连接则复用）并返回服务器信息与工具清单。
+    /// 只建立连接；能力枚举由调用方独立请求。
     pub async fn connect(&self, name: &str) -> Result<Value> {
         let session = self.session(name).await?;
-        let tools = session.list_tools(true).await?;
-        Ok(json!({ "server": session.summary(), "tools": tools }))
+        Ok(json!({ "server": session.summary() }))
     }
 
     pub async fn tools(&self, name: &str, refresh: bool) -> Result<Value> {
@@ -795,6 +820,76 @@ impl McpManager {
         let session = self.session(name).await?;
         let result = session.call_tool(tool, arguments).await?;
         Ok(json!({ "server": name, "tool": tool, "result": result }))
+    }
+
+    /// 单页内容目录。游标原样传递，不缓存，避免展示陈旧目录。
+    pub async fn content_list(
+        &self,
+        name: &str,
+        kind: &str,
+        cursor: Option<&str>,
+    ) -> Result<Value> {
+        let (capability, method, field) = match kind {
+            "resources" => ("resources", "resources/list", "resources"),
+            "templates" => ("resources", "resources/templates/list", "resourceTemplates"),
+            "prompts" => ("prompts", "prompts/list", "prompts"),
+            _ => bail!("未知 MCP 目录类型"),
+        };
+        let session = self.session(name).await?;
+        let params = cursor.map_or_else(|| json!({}), |cursor| json!({"cursor": cursor}));
+        let result = session.content_request(capability, method, params).await?;
+        if !result[field].is_array() {
+            bail!("{method} 返回缺少 {field} 数组");
+        }
+        if result
+            .get("nextCursor")
+            .is_some_and(|value| !value.is_string())
+        {
+            bail!("{method} 返回无效 nextCursor");
+        }
+        let mut response = json!({"server": session.summary(), (field): result[field]});
+        if let Some(cursor) = result.get("nextCursor") {
+            response["nextCursor"] = cursor.clone();
+        }
+        Ok(response)
+    }
+
+    pub async fn read_resource(&self, name: &str, uri: &str) -> Result<Value> {
+        if uri.trim().is_empty() {
+            bail!("资源 URI 不能为空");
+        }
+        let session = self.session(name).await?;
+        let result = session
+            .content_request("resources", "resources/read", json!({"uri": uri}))
+            .await?;
+        if !result["contents"].is_array() {
+            bail!("resources/read 返回缺少 contents 数组");
+        }
+        Ok(json!({"server": name, "uri": uri, "result": result}))
+    }
+
+    pub async fn get_prompt(&self, name: &str, prompt: &str, arguments: Value) -> Result<Value> {
+        if prompt.trim().is_empty() {
+            bail!("提示词名称不能为空");
+        }
+        if !arguments
+            .as_object()
+            .is_some_and(|values| values.values().all(Value::is_string))
+        {
+            bail!("提示词参数必须是字符串值组成的 JSON 对象");
+        }
+        let session = self.session(name).await?;
+        let result = session
+            .content_request(
+                "prompts",
+                "prompts/get",
+                json!({"name": prompt, "arguments": arguments}),
+            )
+            .await?;
+        if !result["messages"].is_array() {
+            bail!("prompts/get 返回缺少 messages 数组");
+        }
+        Ok(json!({"server": name, "prompt": prompt, "result": result}))
     }
 
     /// 断开一个服务器（name 为 * 时全部断开）。

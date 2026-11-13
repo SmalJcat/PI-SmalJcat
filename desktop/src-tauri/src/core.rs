@@ -118,6 +118,10 @@ impl Core {
             include_str!("../../extensions/desktop-context.mjs"),
         )?;
         fs::write(
+            data_dir.join("desktop-model-policy.mjs"),
+            include_str!("../../extensions/desktop-model-policy.mjs"),
+        )?;
+        fs::write(
             data_dir.join("desktop-permissions.mjs"),
             include_str!("../../extensions/desktop-permissions.mjs"),
         )?;
@@ -373,7 +377,7 @@ impl Core {
         }
         .await;
         match result {
-            Ok(value) => {
+            Ok(mut value) => {
                 if let Some(file) = value["state"]["sessionFile"].as_str() {
                     let lease = match pending_lease {
                         Some(lease) => Ok(lease),
@@ -410,6 +414,7 @@ impl Core {
                 }
                 *self.context_settings.lock().unwrap() = None;
                 if let Ok(settings) = self.query_context_settings(&active, "get").await {
+                    value["state"]["fastMode"] = settings["fastMode"].clone();
                     *self.context_settings.lock().unwrap() = Some(settings);
                 }
                 Ok(value)
@@ -632,6 +637,20 @@ impl Core {
             }
         }
         let mut state = state;
+        let model_key = format!(
+            "{}/{}",
+            state["model"]["provider"].as_str().unwrap_or_default(),
+            state["model"]["id"].as_str().unwrap_or_default()
+        );
+        if let Some(settings) = self
+            .context_settings
+            .lock()
+            .unwrap()
+            .as_ref()
+            .filter(|settings| settings["modelKey"] == model_key)
+        {
+            state["fastMode"] = settings["fastMode"].clone();
+        }
         state["model"] = public_model(&state["model"]);
         let model_list = models["models"]
             .as_array()
@@ -697,6 +716,8 @@ impl Core {
                     };
                     if !["model_change", "thinking_level_change", "session_info"]
                         .contains(&entry["type"].as_str().unwrap_or_default())
+                        && !(entry["type"] == "custom"
+                            && entry["customType"] == "desktop-fast-mode")
                     {
                         return entry["type"] == "custom"
                             && entry["customType"] == "desktop-message-edit"
@@ -779,6 +800,7 @@ impl Core {
             "set_session_name",
             "compact",
             "set_auto_compaction",
+            "set_fast_mode",
         ]
         .contains(&kind)
         {
@@ -793,10 +815,13 @@ impl Core {
             Some(self.operation.try_lock().context("上一个操作仍在处理中")?)
         };
         let active = self.current().await?;
-        if let Some(expected) = data
-            .as_object_mut()
-            .and_then(|data| data.remove("expectedSessionId"))
-        {
+        if let Some(expected) = data.as_object_mut().and_then(|data| {
+            if kind == "set_fast_mode" {
+                data.get("expectedSessionId").cloned()
+            } else {
+                data.remove("expectedSessionId")
+            }
+        }) {
             let state = active.rpc.call("get_state", json!({})).await?;
             if expected != state["sessionId"] {
                 bail!("会话已切换，消息保留在编辑框中");
@@ -847,6 +872,13 @@ impl Core {
         };
         if kind == "abort" {
             self.agents.permissions.cancel_owner("Pi").await;
+        }
+        if kind == "set_fast_mode" {
+            let result = self.set_fast_mode(&active, data).await;
+            if let Ok(settings) = self.query_context_settings(&active, "get").await {
+                *self.context_settings.lock().unwrap() = Some(settings);
+            }
+            return result;
         }
         let result = active.rpc.request(kind, data, duration).await;
         if result.is_ok() && kind == "set_model" {
@@ -1010,6 +1042,38 @@ impl Core {
             own.as_deref(),
             active.as_ref().map(|a| a.rpc.pid),
         )
+    }
+    async fn set_fast_mode(&self, active: &Active, data: Value) -> Result<Value> {
+        if !data["enabled"].is_boolean()
+            || !data["expectedSessionId"].is_string()
+            || !data["modelKey"].is_string()
+        {
+            bail!("Fast 请求缺少有效开关、会话或模型标识");
+        }
+        self.verify_context_bridge(active).await?;
+        let nonce = uuid::Uuid::new_v4().to_string();
+        let prefix = format!("PI_DESKTOP_CONTEXT:{nonce}:");
+        let cursor = active.rpc.notification_cursor();
+        active
+            .rpc
+            .call(
+                "prompt",
+                json!({"message":format!("/desktop-context fast {nonce} {data}")}),
+            )
+            .await?;
+        let response = active
+            .rpc
+            .notifications_after(cursor)
+            .iter()
+            .filter_map(|event| event["message"].as_str())
+            .find_map(|text| text.strip_prefix(&prefix))
+            .map(str::to_owned)
+            .context("Pi 未返回 Fast 设置结果，请重新连接后核对状态")?;
+        let result: Value = serde_json::from_str(&response)?;
+        if result["ok"] != true {
+            bail!("{}", result["error"].as_str().unwrap_or("Fast 设置失败"));
+        }
+        Ok(result["fastMode"].clone())
     }
     async fn verify_context_bridge(&self, active: &Active) -> Result<()> {
         let commands = active.rpc.call("get_commands", json!({})).await?;

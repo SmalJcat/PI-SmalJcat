@@ -1,3 +1,4 @@
+import desktopModelPolicy, { fastState, fastChoices, pendingEdit } from '../extensions/desktop-model-policy.mjs';
 import desktopPermissions from '../extensions/desktop-permissions.mjs';
 // Deterministic Pi protocol fixture. Never makes a model or network request.
 import { JsonLines } from '../electron/rpc.mjs';
@@ -22,12 +23,12 @@ const settings = () => {
   const project = projectTrusted ? read(path.join(cwd, '.pi/settings.json')).compaction || {} : {};
   const modelKey = `${model.provider}/${model.id}`;
   const override = { ...global.modelOverrides?.[modelKey], ...project.modelOverrides?.[modelKey] };
-  return { ok: true, modelKey, enabled: project.enabled ?? global.enabled ?? true, reserveTokens: override.reserveTokens ?? project.reserveTokens ?? global.reserveTokens ?? 16384, keepRecentTokens: override.keepRecentTokens ?? project.keepRecentTokens ?? global.keepRecentTokens ?? 20000, projectTrusted, projectOverride: !!project.modelOverrides?.[modelKey] || typeof project.enabled === 'boolean' };
+  return { ok: true, fastMode: fastState(policyContext()), modelKey, enabled: project.enabled ?? global.enabled ?? true, reserveTokens: override.reserveTokens ?? project.reserveTokens ?? global.reserveTokens ?? 16384, keepRecentTokens: override.keepRecentTokens ?? project.keepRecentTokens ?? global.keepRecentTokens ?? 20000, projectTrusted, projectOverride: !!project.modelOverrides?.[modelKey] || typeof project.enabled === 'boolean' };
 };
 const queue = { steering: [], followUp: [] };
 const models = [
-  { id: 'fixture-model', name: '测试模型', provider: 'fixture', reasoning: true, input: ['text', 'image'], contextWindow: 200000 },
-  { id: 'fixture-fast', name: '快速模型', provider: 'fixture', reasoning: false, input: ['text'], contextWindow: 64000 },
+  { id: 'fixture-model', name: '测试模型', provider: 'fixture', api: 'openai-responses', reasoning: true, input: ['text', 'image'], contextWindow: 200000 },
+  { id: 'fixture-fast', name: '快速模型', provider: 'fixture', api: 'anthropic-messages', reasoning: false, input: ['text'], contextWindow: 64000 },
 ];
 let model = models[0], thinkingLevel = 'medium';
 let sessionFile = noSession ? undefined : (!forked && restored) || path.join(sessionDir, `${sessionId}.jsonl`);
@@ -103,6 +104,8 @@ const activeEntries = () => {
   while(id&&!seen.has(id)){seen.add(id);const entry=byId.get(id);if(!entry)break;branch.push(entry);id=entry.parentId;}
   return branch.reverse();
 };
+const policyContext = () => ({ model, isIdle: () => !active && !compacting, hasPendingMessages: () => !!(queue.steering.length + queue.followUp.length), sessionManager: { getSessionId: () => sessionId, getBranch: activeEntries } });
+const policy = desktopModelPolicy({ on() {}, appendEntry: (customType, data) => append({ type: 'custom', customType, data }) });
 const handle = command => {
   switch (command.type) {
     case 'get_state': {
@@ -158,17 +161,22 @@ const handle = command => {
       if (command.message.startsWith('/desktop-context ')) {
         const [, operation, nonce, ...payload] = command.message.split(' ');
         let result = settings();
+        if (operation === 'fast') {
+          try { result = { ok: true, fastMode: policy.set(policyContext(), JSON.parse(payload.join(' '))) }; }
+          catch (error) { result = { ok: false, error: error.message }; }
+        }
         if (operation === 'edit') {
           const { sessionId: expected, entryId } = JSON.parse(payload.join(' '));
           const target = activeEntries().find(entry => entry.id === entryId && entry.type === 'message' && entry.message.role === 'user');
-          const leaf = activeEntries().reverse().find(entry => !['model_change', 'thinking_level_change', 'session_info'].includes(entry.type));
-          const prepared = leaf?.type === 'custom' && leaf.customType === 'desktop-message-edit' && leaf.data?.entryId === entryId;
+          const leaf = pendingEdit(activeEntries());
+          const prepared = leaf?.data?.entryId === entryId;
           if (expected !== sessionId || (!target && !prepared) || active || compacting) result = { ok: false, error: 'Invalid edit target or busy session' };
           else if (prepared) result = { ok: true, cancelled: false };
           else if (JSON.stringify(target.message.content).includes('[edit-cancel]')) result = { ok: true, cancelled: true };
           else {
+            const fastModes = fastChoices(activeEntries());
             leafId = target.parentId;
-            append({ type: 'custom', customType: 'desktop-message-edit', data: { entryId } });
+            append({ type: 'custom', customType: 'desktop-message-edit', data: { entryId, fastModes } });
             result = { ok: true, cancelled: false };
           }
         }

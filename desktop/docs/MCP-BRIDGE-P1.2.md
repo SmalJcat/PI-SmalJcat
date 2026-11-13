@@ -85,10 +85,18 @@ node scripts/native.mjs cargo test --manifest-path src-tauri/Cargo.toml --no-def
 - 单行上限 1 MiB，单事件/JSON 正文上限 4 MiB，响应头上限 64 KiB；最终工具结果仍沿用 256 KiB 展示上限。配置中不得覆盖客户端管理的会话、协议、内容类型及传输头。
 - 回归入口：`node scripts/native.mjs cargo test --manifest-path src-tauri/Cargo.toml --no-default-features --test mcp_http`，使用本机 Node 启动 loopback 夹具；不读取用户 MCP 配置或调用模型。最新执行结果见 `../VERIFICATION.md`。
 
+## 2026-11-12 内容接口增量（开发分支）
+
+- 连接与 tools/list 解耦，`mcp-connect` 返回 `{server}`，新增 `server.capabilities`。原有调用方需要枚举工具时显式使用 `mcp-tools`。
+- 新增 `resources/list`、`resources/templates/list`、`resources/read`、`prompts/list`、`prompts/get`；列表每次一页，保留不透明 nextCursor，不缓存、不自动重放。未声明能力时本地拒绝。
+- 单页和内容结果超过 256 KiB 报错，不截断结构化内容。提示词参数必须是字符串值的 JSON 对象，服务端仍负责参数语义校验。
+- “桌面调试”提供能力切换、分页、资源 URI 读取、模板说明和提示词参数/消息展示。文本不执行，二进制不自动下载，资源链接保留 URI。
+- 完整桥接契约与验证入口见 [MCP-CONTENT.md](MCP-CONTENT.md)。此增量尚未打包部署。
+
 ## 已知限制
 
 - 通知目前用于使工具缓存失效；已展开的工具面板仍通过“刷新工具”重新查询，不主动推送新清单到界面。
 - GET 的事件重放由服务器决定。客户端不重放断开的 POST/工具调用；不支持服务端发起的 sampling/elicitation 等请求、OAuth 或传统 HTTP+SSE 双端点。
-- 未做 MCP `resources` / `prompts`：本阶段只桥接 `tools`（与 DSH mcp-client 的取舍一致）。
+- 资源/提示词目录按用户刷新读取；未实现 resources/subscribe、参数 completion 或自动更新已展开目录。
 - 连接由桌面进程托管，不向 Pi 注入工具；要让 Pi 用上这些工具仍走 Pi 自己的 MCP 配置。
 - MCP Apps 宿主已具备独立 WebView 与授权检查，但资源仍为 fixture；真实资源接入属于后续工作。

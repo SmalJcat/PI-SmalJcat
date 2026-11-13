@@ -1,5 +1,38 @@
 # Pi Desktop 发布验收
 
+## 0.7.1 MCP 内容、编辑重发与 Fast 正式交付（2026-11-12，11 月 13 日补记）
+
+- 正式包包含 `2056780` 的 MCP resources/prompts 与 CI 增量，以及 `e29c52f` 的编辑重发预检与 Fast。后者对应的远端 Windows Actions 已通过。[Windows Actions](https://github.com/SmalJcat/PI-SmalJcat/actions/runs/43164982056)
+- 11 月 12 日 14:18 HKT，从干净提交 `e29c52fa00df8f65ff74db5a8bdd8a9739c83544` 构建并暂存正式程序，版本 0.7.1，17,899,520 字节。SHA-256 为 `bf16313f8b2fa463b704dbde6fb83aa0f1d0817c6138206dac74b7fd4865674f`，142 个文件的源码指纹为 `35862605236d56f11876007617d7cbfb8de602dd14b5fc4345baa623f210276b`。
+- 当日 14:30 HKT，正式包完成真实 Pi / 官方 ACP 6 项检查，渲染错误 0、模型请求 0。读取真实模型、命令、MCP 及有效上下文配置，验证官方 ACP 连接与配置、正常关闭、所属进程退出和退出标记。验收程序哈希与上述正式程序一致。
+- 随后通过既有部署工具更新 `%LOCALAPPDATA%\Programs\Pi Desktop\fdea6c4`，原安装保留为 `fdea6c4.backup-2026-11-12T06-30-13-894Z-f39d161a`。部署回执记录该安装入口及 PID 18868，阶段为 `completed`、`success: true`。
+- 11 月 13 日重新计算暂存和安装程序的大小及 SHA-256，逐项比较两处发布清单，并重新计算当前源码指纹，均与构建及验收回执一致。当日复跑 JavaScript 124 项与前端生产构建通过。Rust 167/169 项、WebView2 68 项和正式包 6 项结果取自 11 月 12 日回执，远端 CI 状态另行核对。
+- 构建、正式包验收与部署回执为 `artifacts/deploy-20261112-package-result.json`、`deploy-20261112-release-result.json`、`deploy-20261112-result.json`，正式验收副本为 `tauri-release-result.json`。11 月 13 日复核日志为 `review-20261113-js.log`、`review-20261113-build.log`。下方两节保留开发阶段的验证过程，当前安装交付状态以上述正式程序为准。
+
+## 开发分支：编辑重发预检与 Fast 开关（2026-11-12）
+
+- 先将 MCP 内容增量提交为 `2056780` 并推送 `origin/feature/mcp-resources-prompts`，对应 Windows Actions 已成功。本节修复继续在同一分支，开发验收后于当日 14:30 HKT 完成正式包验收和本机部署，见上方交付记录。[MCP 增量 Windows Actions](https://github.com/SmalJcat/PI-SmalJcat/actions/runs/43158779341)
+- 编辑旧用户消息会回到父节点，后续压缩记录退出活动分支。新增策略仅在编辑标记仍为活动叶子的发送前检查取消 `threshold` 摘要；新用户消息追加后恢复通常阈值检查。手动压缩和真实溢出恢复保持原行为，未关闭全局自动压缩。Pi 仍可能短暂发出 start/aborted 事件，但不调用摘要模型。
+- 原先模型弹层左上角闪电只是静态 SVG；现接入会话/模型校验、原生操作锁和扩展请求钩子。OpenAI Responses / Codex Responses / Chat Completions 传输开启发送 `service_tier: priority`、显式关闭发送 `default`；推理强度独立。状态按会话分支/模型持久化，编辑时携带现有选择；不支持的后端禁用并说明原因。兼容网关或账号的优先处理资格及实际速度未经保证。
+- JavaScript **124 项**、常规 Rust **167 项**、test-fixture Rust **169 项**、TypeScript/Vite、格式及严格 Clippy 通过；Rust 两种模式各有 4 项真实环境检查默认忽略。Rust 追加 Fast 过期模型/请求校验、编辑准备后切档位幂等及运行中拒绝检查。
+- `npm run test:edit-fast:contract` 使用实际 `D:/PI/pi.exe`、临时会话/配置与本机 OpenAI 兼容服务，**4 类契约通过**：高用量历史编辑重发仅一次正常请求、实际 priority/default 参数与编辑/重连恢复、手动压缩、溢出摘要及自动重试。共 7 次本机模拟请求，外部模型请求 **0**。最初夹具历史/溢出输入不足以形成压缩切点，补足可压缩历史后通过；未放宽成功断言。
+- 13:51 HKT，真实 Tauri/WebView2 + Pi/ACP/MCP fixture **68 项**通过，渲染错误 **0**、模型请求 **0**。Fast 覆盖点击、Space、失败保持关闭、运行中禁用、不支持模型禁用及推理档位不变。已查看 `composer-fast-enabled.png`。debug 程序 SHA-256：`9439dea4a8ad99f546e1ed2fd1b5fbacb8c6ba33e97a1a6debdb008267c919aa`。
+- 证据：`artifacts/edit-fast-js.log`、`edit-fast-full-{rust,rust-fixture,fmt,clippy,ui}.log`、`edit-fast-checks.json`、`edit-fast-contract-result.json`、`edit-fast-contract-retry.log`、`edit-fast-ui-result.json`。独立只读核验未发现新缺陷。
+- 本机 Pi 的 provider 源码支持 service_tier 和请求钩子；官方 OpenAI 文档抓取返回 403，本轮未将其作为已核验来源。真实请求捕获使用 Chat Completions 兼容夹具；未实测付费远程优先档位、Codex 登录账号或 Antigravity Fast。详细契约见 [EDIT-FAST.md](docs/EDIT-FAST.md)。
+
+## 开发分支：CI 与 MCP resources/prompts（2026-11-12）
+
+- 分支 `feature/mcp-resources-prompts`，基于 `ab3a388`，版本为 0.7.1。本节记录打包前的 MCP 开发验收，最终正式包与本机部署见上方 11 月 12 日交付记录。
+- 新增 stdio / Streamable HTTP 资源、资源模板与提示词分页枚举，资源读取及提示词获取；连接不再强制 tools/list，握手能力透传到界面。独立核验发现提示词 `resource_link` 的 URI 丢失，已补名称、URI、MIME 与回归。
+- `npm ci`、TypeScript/Vite 构建、JavaScript **120 项**、常规 Rust **167 项**、test-fixture Rust **169 项**、格式检查及全目标严格 Clippy 通过。两种 Rust 模式各有 **4 项**需要本机真实配置的检查默认忽略。
+- 协议回归覆盖无 tools 能力服务器、三类目录分页与不透明游标、文本/二进制内容、HTTP SSE 资源结果、提示词参数与错误、无能力拒绝、格式错误和 256 KiB 超限；MCP 定向测试 **14 项**通过，另有 1 项真实配置测试默认忽略。
+- 使用 CI 同款 Playwright Chromium、`CI=true` 运行侧栏 **18 类**检查与 MCP 浏览器 **4 类**检查通过。MCP 覆盖参数校验不发请求、HTML 保持纯文本、切换后迟到响应隔离及 1440/1024px 布局。侧栏首次因焦点滚动事件晚于菜单打开而超时，增加滚动完成后键盘激活的等待后通过；启动失败清理及失败截图/回执已补齐。
+- 11:21 HKT，真实 Tauri / WebView2 + 隔离 Pi/ACP/MCP fixture **67 项**通过，渲染错误 **0**，模型请求 **0**。新增 3 类 MCP 检查完整通过界面 → Rust → stdio 子进程；夹具配置只写临时 agent/mcp.json。debug 程序 SHA-256：`18a472154e6798485ddc6390a9df2a3c2285c501988541c10cbb082da9489825`。已查看本轮浏览器及原生资源/提示词截图。
+- 环境排障：Playwright 下载最初继承失效代理 `127.0.0.1:7892`，仅在下载进程清空代理后成功；原生验收首次在构建阶段因临时脚本残留空 CI 变量失败，移除该环境变量后完整重跑通过。未修改用户代理配置。
+- CI 工作流已新增 Chromium、侧栏/MCP 浏览器、fixture Rust、loopback NO_PROXY 及浏览器产物上传；本轮仅在本机执行这些命令，**未运行远端 GitHub Actions**。
+- 证据：`artifacts/mcp-content-full-{build,js,rust,rust-fixture,fmt,clippy,ui}.log`、`mcp-content-sidebar-retry.log`、`mcp-content-browser-final.log`；回执 `sidebar/result.json`、`mcp-content/result.json`、`mcp-content-ui-result.json`；截图 `mcp-resource.png`、`mcp-prompt.png` 及 `mcp-content/`。首次失败日志保留。
+- 验证边界：HTTP 使用本机 loopback 服务；未实测第三方远端 TLS/代理/OAuth，未将 MCP Apps 演示 catalog/result 接成真实第三方 WebView。资源/提示词暂不支持订阅与 completion，二进制只展示说明，不自动下载或执行内容。
+
 ## 0.7.1 Windows CI 路径别名修复与正式交付（2026-11-11）
 
 - [PR #2](https://github.com/SmalJcat/PI-SmalJcat/pull/2) 的首次 Windows CI 在受保护配置写入检查中失败。使用 Windows 8.3 短路径作为本机 `TEMP` / `TMP`，复现了相同的 `Some(true)` / `None` 断言差异。

@@ -51,6 +51,26 @@ async fn editing_stays_in_session_and_rejects_stale_busy_or_cancelled_targets() 
         .await
         .unwrap();
     let id = before["state"]["sessionId"].as_str().unwrap();
+    let fast_options =
+        json!({"enabled":true,"expectedSessionId":id,"modelKey":"fixture/fixture-model"});
+    assert!(core
+        .command("set_fast_mode", json!({"enabled":true}))
+        .await
+        .is_err());
+    assert!(core
+        .command(
+            "set_fast_mode",
+            json!({"enabled":true,"expectedSessionId":id,"modelKey":"stale"})
+        )
+        .await
+        .is_err());
+    core.command("set_fast_mode", fast_options.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        core.snapshot().await.unwrap()["state"]["fastMode"]["enabled"],
+        true
+    );
     assert!(core
         .prepare_message_edit("stale-session", "a0000002")
         .await
@@ -85,6 +105,16 @@ async fn editing_stays_in_session_and_rejects_stale_busy_or_cancelled_targets() 
     assert!(fs::read_to_string(&source)
         .unwrap()
         .contains("old second answer"));
+    core.command(
+        "set_fast_mode",
+        json!({"enabled":false,"expectedSessionId":id,"modelKey":"fixture/fixture-model"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        core.snapshot().await.unwrap()["state"]["fastMode"]["enabled"],
+        false
+    );
     let prepared_bytes = fs::read(before["state"]["sessionFile"].as_str().unwrap()).unwrap();
     let retry = core.prepare_message_edit(id, "a0000002").await.unwrap();
     assert_eq!(
@@ -150,6 +180,10 @@ async fn editing_stays_in_session_and_rejects_stale_busy_or_cancelled_targets() 
         .prepare_message_edit(new_id, target["_entryId"].as_str().unwrap())
         .await
         .is_err());
+    assert!(
+        core.command("set_fast_mode", fast_options).await.is_err(),
+        "Fast must not change during a running prompt"
+    );
     core.command("abort", json!({})).await.unwrap();
     core.shutdown().await;
 }

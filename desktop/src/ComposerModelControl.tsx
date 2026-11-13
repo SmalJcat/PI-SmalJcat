@@ -1,13 +1,14 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Check, ChevronDown, ChevronRight, LoaderCircle, RotateCcw, Search, Zap } from './icons';
-import type { Model } from './types';
+import type { Model, Wire } from './types';
 
 const labels: Record<string, string> = { off: '关闭', minimal: '最低', low: '低', medium: '中', high: '高', xhigh: '极高', max: '最高' };
 const keyOf = (model?: Model) => model ? `${model.provider}::${model.id}` : '';
 
-export function ComposerModelControl({ models, model, levels, level, ready, locked, onModelChange, onLevelChange, onError }: {
+export function ComposerModelControl({ models, model, levels, level, ready, locked, onModelChange, onLevelChange, onError, fastMode, onFastChange }: {
   models: Model[]; model?: Model; levels: string[]; level: string; ready: boolean; locked: boolean;
+  fastMode?: Wire; onFastChange?: (enabled: boolean) => Promise<void>;
   onModelChange: (model: Model) => Promise<void>; onLevelChange: (level: string) => Promise<void>; onError: (error: unknown) => void;
 }) {
   const [open, setOpen] = useState(false), [showModels, setShowModels] = useState(false), [query, setQuery] = useState('');
@@ -82,10 +83,11 @@ export function ComposerModelControl({ models, model, levels, level, ready, lock
 
   return <>
     <button ref={trigger} className={`composer-reasoning-trigger ${open ? 'active' : ''}`} type="button" aria-label="模型与推理强度" aria-haspopup="dialog" aria-expanded={open} aria-controls={open ? id : undefined} disabled={!ready} title={`${model?.name || model?.id || '选择模型'} · ${labels[level] || level}`} onClick={() => { if (open) close(); else { setDraft(level); setOpen(true); } }}>
-      {pending ? <LoaderCircle size={16} className="spin" /> : <Zap size={16} />}<span className="composer-current-model">{model?.name || model?.id || '选择模型'}</span>{levels.length > 0 && <span className="composer-current-level">{labels[level] || level}</span>}<ChevronDown size={14} />
+      {pending ? <LoaderCircle size={16} className="spin" /> : <Zap size={16} className={fastMode?.enabled ? 'fast-active' : undefined} />}<span className="composer-current-model">{model?.name || model?.id || '选择模型'}</span>{levels.length > 0 && <span className="composer-current-level">{labels[level] || level}</span>}<ChevronDown size={14} />
     </button>
     {open && createPortal(<div ref={panel} id={id} className="reasoning-popover" role="dialog" aria-label="模型与推理设置" aria-modal="false" style={position}>
-      <div className="reasoning-heading"><Zap size={18} /><div><strong aria-live="polite">{pending ? <LoaderCircle size={18} className="spin" /> : labels[draft] || draft}</strong><button type="button" className="reasoning-model" aria-label="选择模型" aria-expanded={showModels} disabled={disabled} onClick={() => setShowModels(value => !value)}>{model?.name || model?.id || '选择模型'}<ChevronRight size={14} /></button></div><button type="button" className="reasoning-reset" title="设为中等推理" aria-label="设为中等推理" disabled={disabled || !choices.includes('medium')} onClick={() => chooseLevel('medium')}><RotateCcw size={18} /></button></div>
+      <div className="reasoning-heading"><button type="button" className={`reasoning-fast ${fastMode?.enabled ? 'active' : ''}`} aria-label="Fast 模式" aria-pressed={fastMode?.enabled === true} disabled={disabled || !fastMode?.supported || !onFastChange} title={fastMode?.reason || '当前后端未提供可用的 Fast 服务档位。'} onClick={() => void apply(() => onFastChange!(!fastMode?.enabled))}><Zap size={18} /></button><div><strong aria-live="polite">{pending ? <LoaderCircle size={18} className="spin" /> : labels[draft] || draft}</strong><button type="button" className="reasoning-model" aria-label="选择模型" aria-expanded={showModels} disabled={disabled} onClick={() => setShowModels(value => !value)}>{model?.name || model?.id || '选择模型'}<ChevronRight size={14} /></button></div><button type="button" className="reasoning-reset" title="设为中等推理" aria-label="设为中等推理" disabled={disabled || !choices.includes('medium')} onClick={() => chooseLevel('medium')}><RotateCcw size={18} /></button></div>
+      <p className="reasoning-fast-help">{fastMode?.supported ? `Fast ${fastMode.enabled ? '已开启' : '已关闭'} · 优先处理可能增加费用，由服务端决定是否生效。` : fastMode?.reason || '当前后端未提供可用的 Fast 服务档位。'}</p>
       <div className="reasoning-range" style={{ '--reasoning-fill': `${choices.length > 1 ? index / (choices.length - 1) * 100 : 0}%` } as React.CSSProperties}>
         <div className="reasoning-dots" aria-hidden="true">{choices.map(value => <i key={value} />)}</div>
         <input type="range" aria-label="推理强度" aria-valuetext={labels[draft] || draft} min={0} max={Math.max(1, choices.length - 1)} step={1} value={index} disabled={disabled || choices.length < 2} onChange={event => setDraft(choices[Number(event.currentTarget.value)] || choices[0])} onPointerUp={event => chooseLevel(choices[Number(event.currentTarget.value)] || choices[0])} onKeyUp={event => { if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown'].includes(event.key)) chooseLevel(choices[Number(event.currentTarget.value)] || choices[0]); }} onBlur={event => chooseLevel(choices[Number(event.currentTarget.value)] || choices[0])} />

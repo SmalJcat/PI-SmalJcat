@@ -2,9 +2,11 @@
 import { SettingsManager, getAgentDir } from '@earendil-works/pi-coding-agent';
 import { Type } from '@sinclair/typebox';
 import desktopPermissions from './desktop-permissions.mjs';
+import desktopModelPolicy, { pendingEdit } from './desktop-model-policy.mjs';
 
 export default function desktopContext(pi) {
   desktopPermissions(pi);
+  const modelPolicy = desktopModelPolicy(pi);
   const reportUsage = (_event, ctx) => {
     try {
       const usage = ctx.getContextUsage();
@@ -20,26 +22,32 @@ export default function desktopContext(pi) {
     description: '读取桌面上下文配置或重新加载已保存的设置',
     handler: async (args, ctx) => {
       const [operation, nonce, ...payload] = args.trim().split(/\s+/);
-      if (!['get', 'reload', 'edit'].includes(operation) || !/^[a-f0-9-]{36}$/.test(nonce || '')) return;
+      if (!['get', 'reload', 'edit', 'fast'].includes(operation) || !/^[a-f0-9-]{36}$/.test(nonce || '')) return;
       const prefix = `PI_DESKTOP_CONTEXT:${nonce}:`;
       try {
+        if (operation === 'fast') {
+          const fastMode = modelPolicy.set(ctx, JSON.parse(payload.join(' ')));
+          ctx.ui.notify(prefix + JSON.stringify({ ok: true, fastMode }), 'info');
+          return;
+        }
         if (operation === 'edit') {
           const { sessionId, entryId } = JSON.parse(payload.join(' '));
           if (ctx.sessionManager.getSessionId() !== sessionId) throw new Error('会话已切换，请重新选择要编辑的消息');
           if (!ctx.isIdle() || ctx.hasPendingMessages()) throw new Error('请先停止当前任务再编辑消息');
           // Pi may append model/thinking metadata while restoring this branch.
           const branch = ctx.sessionManager.getBranch();
-          const leaf = [...branch].reverse().find(entry => !['model_change', 'thinking_level_change', 'session_info'].includes(entry.type));
-          if (leaf?.type === 'custom' && leaf.customType === 'desktop-message-edit' && leaf.data?.entryId === entryId) {
+          const leaf = pendingEdit(branch);
+          if (leaf?.data?.entryId === entryId) {
             ctx.ui.notify(prefix + JSON.stringify({ ok: true, cancelled: false }), 'info');
             return;
           }
           const target = branch.find(entry => entry.id === entryId);
           if (target?.type !== 'message' || target.message.role !== 'user') throw new Error('该消息已不在当前会话分支中，请刷新后重新选择');
           // Selecting a user entry navigates to its parent, excluding the old prompt.
+          const fastModes = modelPolicy.choices(ctx);
           const result = await ctx.navigateTree(entryId, { summarize: false });
           // Persist the selected leaf even if resending fails or the editor is closed.
-          if (!result.cancelled) pi.appendEntry('desktop-message-edit', { entryId });
+          if (!result.cancelled) pi.appendEntry('desktop-message-edit', { entryId, fastModes });
           ctx.ui.notify(prefix + JSON.stringify({ ok: true, cancelled: !!result.cancelled }), 'info');
           return;
         }
@@ -57,7 +65,7 @@ export default function desktopContext(pi) {
         if (errors.length) throw new Error('Pi 设置文件无法读取，请检查配置 JSON。');
         const key = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : '';
         const project = settings.getProjectSettings().compaction;
-        ctx.ui.notify(prefix + JSON.stringify({ ok: true, ...settings.getCompactionSettings(ctx.model), modelKey: key, projectTrusted, projectOverride: !!project?.modelOverrides?.[key] || typeof project?.enabled === 'boolean' }), 'info');
+        ctx.ui.notify(prefix + JSON.stringify({ ok: true, fastMode: modelPolicy.get(ctx), ...settings.getCompactionSettings(ctx.model), modelKey: key, projectTrusted, projectOverride: !!project?.modelOverrides?.[key] || typeof project?.enabled === 'boolean' }), 'info');
       } catch (error) {
         ctx.ui.notify(prefix + JSON.stringify({ ok: false, error: String(error.message || error) }), 'info');
       }

@@ -87,6 +87,7 @@ export function formatCallResult(result) {
   for (const block of blocks) {
     const type = String(block?.type || '');
     if (type === 'text') parts.push(String(block.text ?? ''));
+    else if (type === 'resource_link') parts.push([block.name, block.uri, block.mimeType, block.description].filter(value => typeof value === 'string' && value).join('\n') || '[资源链接]');
     else if (RESULT_PLACEHOLDERS[type]) parts.push(RESULT_PLACEHOLDERS[type]);
     else parts.push('[不支持的块：' + (type || 'unknown') + ']');
   }
